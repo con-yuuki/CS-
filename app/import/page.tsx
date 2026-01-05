@@ -217,9 +217,32 @@ export default function ImportPage() {
         }
       }
 
+      // 環境変数の確認メッセージを追加
+      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+      
+      let finalMessage = `${successCount}件のデータをインポートしました`;
+      if (errorCount > 0) {
+        finalMessage += `（エラー: ${errorCount}件）`;
+      }
+      if (unregisteredCompanies.length > 0) {
+        finalMessage += `（未登録企業: ${unregisteredCompanies.length}件）`;
+      }
+      
+      // 環境変数が設定されていない場合の警告
+      if (!supabaseUrl || !supabaseAnonKey) {
+        finalMessage += '\n\n⚠️ 警告: Supabase環境変数が設定されていません。Vercelの環境変数を確認してください。';
+        if (!supabaseUrl) {
+          results.push('❌ NEXT_PUBLIC_SUPABASE_URL が設定されていません');
+        }
+        if (!supabaseAnonKey) {
+          results.push('❌ NEXT_PUBLIC_SUPABASE_ANON_KEY が設定されていません');
+        }
+      }
+      
       setProcessResult({
-        success: errorCount === 0,
-        message: `${successCount}件のデータをインポートしました${errorCount > 0 ? `（エラー: ${errorCount}件）` : ""}${unregisteredCompanies.length > 0 ? `（未登録企業: ${unregisteredCompanies.length}件）` : ""}`,
+        success: errorCount === 0 && unregisteredCompanies.length === 0,
+        message: finalMessage,
         details: results,
         unregisteredCompanies: unregisteredCompanies.length > 0 ? unregisteredCompanies : undefined,
       });
@@ -240,6 +263,11 @@ export default function ImportPage() {
     }
   };
 
+  // 環境変数の確認
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const envVarsConfigured = supabaseUrl && supabaseAnonKey;
+
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="mb-6">
@@ -247,6 +275,39 @@ export default function ImportPage() {
           <Button variant="ghost">← ホームに戻る</Button>
         </Link>
       </div>
+
+      {/* 環境変数の確認表示 */}
+      {!envVarsConfigured && (
+        <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertCircle className="h-5 w-5 text-yellow-500" />
+            <h3 className="font-medium text-yellow-800">⚠️ Supabase環境変数が設定されていません</h3>
+          </div>
+          <p className="text-sm text-yellow-700 mb-2">
+            インポート機能を使用するには、Vercelの環境変数を設定する必要があります。
+          </p>
+          <div className="text-xs text-yellow-600 space-y-1">
+            {!supabaseUrl && <p>❌ NEXT_PUBLIC_SUPABASE_URL が設定されていません</p>}
+            {!supabaseAnonKey && <p>❌ NEXT_PUBLIC_SUPABASE_ANON_KEY が設定されていません</p>}
+          </div>
+          <div className="mt-3 p-3 bg-yellow-100 rounded text-xs text-yellow-800">
+            <p className="font-medium mb-1">📝 解決方法:</p>
+            <ol className="list-decimal list-inside space-y-1">
+              <li>Vercelダッシュボードの「Settings」→「Environment Variables」に移動</li>
+              <li>以下の環境変数を追加：
+                <ul className="list-disc list-inside ml-4 mt-1">
+                  <li>NEXT_PUBLIC_SUPABASE_URL: https://hcceyhmisbmclqrgfedr.supabase.co</li>
+                  <li>NEXT_PUBLIC_SUPABASE_ANON_KEY: （Supabaseのanon key）</li>
+                </ul>
+              </li>
+              <li>環境変数を追加後、再デプロイを実行</li>
+            </ol>
+            <p className="mt-2">
+              💡 詳細は <code className="bg-yellow-200 px-1 rounded">FIX_VERCEL_ENV.md</code> を参照してください。
+            </p>
+          </div>
+        </div>
+      )}
 
       <Card className="max-w-4xl mx-auto">
         <CardHeader>
@@ -379,20 +440,36 @@ export default function ImportPage() {
           )}
 
           {/* インポートボタン */}
-          <Button
-            onClick={handleImport}
-            disabled={parsedData.length === 0 || validationErrors.length > 0 || isProcessing}
-            className="w-full"
-          >
-            {isProcessing ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                インポート中...
-              </>
-            ) : (
-              "インポート実行"
-            )}
-          </Button>
+          {parsedData.length > 0 && validationErrors.length === 0 && (
+            <div className="space-y-2">
+              {!envVarsConfigured && (
+                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
+                  <p className="text-sm text-red-700">
+                    ⚠️ 環境変数が設定されていないため、インポートは失敗します。
+                    上記の手順に従って環境変数を設定してください。
+                  </p>
+                </div>
+              )}
+              <Button
+                onClick={handleImport}
+                disabled={isProcessing || !envVarsConfigured}
+                className="w-full"
+                size="lg"
+              >
+                {isProcessing ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    インポート中...
+                  </>
+                ) : (
+                  <>
+                    <Upload className="mr-2 h-4 w-4" />
+                    データをインポート
+                  </>
+                )}
+              </Button>
+            </div>
+          )}
 
           {/* 処理結果 */}
           {processResult && (
