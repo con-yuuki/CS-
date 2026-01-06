@@ -4,10 +4,12 @@ import { Database } from "./database.types";
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
 const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
-// 環境変数が設定されていない場合の警告（開発環境のみ）
+// 環境変数が設定されていない場合の警告
 if (typeof window !== "undefined" && (!supabaseUrl || !supabaseAnonKey)) {
   console.warn(
-    "⚠️ Supabase環境変数が設定されていません。.env.localファイルを確認してください。"
+    "⚠️ Supabase環境変数が設定されていません。",
+    "Vercelの環境変数を設定し、再デプロイを実行してください。",
+    "詳細: https://vercel.com/con-yuukis-projects/alert/settings/environment-variables"
   );
 }
 
