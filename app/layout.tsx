@@ -24,6 +24,12 @@ export default function RootLayout({
     <html lang="ja">
       <body className={inter.className}>
         <Providers>{children}</Providers>
+        {/* 開発環境でのみ表示されるデバッグ情報 */}
+        {process.env.NODE_ENV === "development" && (
+          <div className="fixed bottom-4 left-4 z-50 bg-blue-500 text-white px-3 py-1 rounded text-xs shadow-lg">
+            🔧 開発モード
+          </div>
+        )}
       </body>
     </html>
   );
