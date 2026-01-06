@@ -35,8 +35,20 @@ export default function TestConnectionPage() {
       const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
       const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
 
+      // デバッグ情報をコンソールに出力
+      console.log("🔍 環境変数の確認:", {
+        supabaseUrl: supabaseUrl ? `${supabaseUrl.substring(0, 20)}...` : "未設定",
+        supabaseAnonKey: supabaseAnonKey ? `${supabaseAnonKey.substring(0, 20)}...` : "未設定",
+        hasUrl: !!supabaseUrl,
+        hasKey: !!supabaseAnonKey,
+      });
+
       if (!supabaseUrl || !supabaseAnonKey) {
-        newResults.error = "環境変数が設定されていません";
+        const missingVars = [];
+        if (!supabaseUrl) missingVars.push("NEXT_PUBLIC_SUPABASE_URL");
+        if (!supabaseAnonKey) missingVars.push("NEXT_PUBLIC_SUPABASE_ANON_KEY");
+        
+        newResults.error = `環境変数が設定されていません: ${missingVars.join(", ")}。Vercelの環境変数を確認し、再デプロイを実行してください。`;
         setResults(newResults);
         setTesting(false);
         return;
