@@ -1,9 +1,10 @@
 import { supabase } from "@/lib/supabase/client";
 import { Database } from "@/lib/supabase/database.types";
 import { calculateHealthScore } from "@/lib/score-calculator";
-import { getUsageLogByPeriod, getUsageLogs } from "./usage-log-service";
+import { getUsageLogByPeriod } from "./usage-log-service";
 import { getCompanyById } from "./company-service";
 import { subWeeks, subMonths, format } from "date-fns";
+import { buildActivityDataFromUsageLog, buildLoginStatsFromUsageLog } from "@/lib/utils/health-score-data";
 
 type HealthScore = Database["public"]["Tables"]["health_scores"]["Row"];
 type HealthScoreInsert = Database["public"]["Tables"]["health_scores"]["Insert"];
@@ -110,34 +111,24 @@ export async function calculateAndSaveHealthScore(
     previousDate
   );
 
-  // スコアを計算（既存のテーブル構造に合わせてカラム名を変更）
-  const currentLoginCount = currentLog.ログイン回数 || 0;
-  const currentEstCount = currentLog.見積作成数 || 0;
-  const currentConstCount = currentLog.工事登録数 || 0;
-  const currentActiveRate = currentLog.Active率 ? Number(currentLog.Active率) : 0;
+  const activityData = buildActivityDataFromUsageLog(currentLog);
+  const loginStats = buildLoginStatsFromUsageLog(currentLog, periodType);
 
-  const previousLoginCount = previousLog ? (previousLog.ログイン回数 || 0) : undefined;
-  const previousEstCount = previousLog ? (previousLog.見積作成数 || 0) : undefined;
-  const previousConstCount = previousLog ? (previousLog.工事登録数 || 0) : undefined;
-  const previousActiveRate = previousLog ? (previousLog.Active率 ? Number(previousLog.Active率) : 0) : undefined;
+  const previousScore = previousLog
+    ? calculateHealthScore({
+        activityData: buildActivityDataFromUsageLog(previousLog),
+        loginStats: buildLoginStatsFromUsageLog(previousLog, periodType),
+        customerProfile: { mrc: Number(company.mrc_ltv || 0) },
+      })
+    : undefined;
 
   const scoreResult = calculateHealthScore({
-    currentPeriod: {
-      login_count: currentLoginCount,
-      est_count: currentEstCount,
-      const_count: currentConstCount,
-      active_rate: currentActiveRate,
-    },
-    previousPeriod: previousLog
-      ? {
-          login_count: previousLoginCount || 0,
-          est_count: previousEstCount || 0,
-          const_count: previousConstCount || 0,
-          active_rate: previousActiveRate || 0,
-        }
+    activityData,
+    loginStats,
+    customerProfile: { mrc: Number(company.mrc_ltv || 0) },
+    previousScore: previousScore
+      ? { rawScore: previousScore.breakdown.rawScore, score: previousScore.score }
       : undefined,
-    mrc: Number(company.mrc_ltv || 0),
-    periodType,
   });
 
   // データベースに保存

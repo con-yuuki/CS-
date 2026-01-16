@@ -1,209 +1,198 @@
 /**
- * CS Health Score 算出ロジック (v12.7 準拠)
- * 100点満点の減点方式で、高単価顧客（インパクト企業）の変動を強調する
+ * CS Health Score 算出ロジック（現在表示している設計案に準拠）
  */
 
-export interface UsageData {
-  login_count: number;
-  est_count: number;
-  const_count: number;
-  active_rate: number;
-  other_features_total?: number; // ログイン以外の15機能の合計利用回数
+export type ActivityEntry = {
+  name: string;
+  count: number;
+};
+
+export type ActivityData = ActivityEntry[] | Record<string, number>;
+
+export interface LoginStats {
+  loginDays: number;
+  workingDays: number;
 }
 
-export interface PreviousPeriodData {
-  login_count: number;
-  est_count: number;
-  const_count: number;
-  active_rate: number;
+export interface CustomerProfile {
+  mrc: number;
+}
+
+export interface PreviousScore {
+  rawScore?: number;
+  score?: number;
 }
 
 export interface ScoreCalculationParams {
-  currentPeriod: UsageData;
-  previousPeriod?: PreviousPeriodData;
-  mrc: number; // 月額契約額
-  periodType: "weekly" | "monthly";
+  activityData: ActivityData;
+  loginStats: LoginStats;
+  customerProfile: CustomerProfile;
+  previousScore?: PreviousScore;
 }
 
 export interface ScoreResult {
   score: number;
   status: "Excellent" | "Stable" | "Warning" | "Critical";
   breakdown: {
-    baseScore: number;
-    variationTotal: number; // インパクト係数適用前
-    adjustedVariation: number; // インパクト係数適用後
+    continuation: number;
+    core: number;
+    peripheral: number;
+    rawScore: number;
+    adjustedScore: number;
     impactMultiplier: number;
+    impactApplied: boolean;
+    impactDrop: number;
     finalScore: number;
   };
-  details: {
-    basicUsage: number;
-    estimateUsage: number;
-    constructionUsage: number;
-    activeRate: number;
-    trend: number;
-  };
 }
 
-const IMPACT_THRESHOLD = 55000; // インパクト企業の閾値（円）
-const IMPACT_MULTIPLIER = 1.5; // インパクト係数
+export const CORE_FEATURE_DEFINITIONS = [
+  { key: "工事", patterns: ["工事登録", "工事"] },
+  { key: "顧客", patterns: ["顧客登録", "顧客"] },
+  { key: "見積", patterns: ["見積作成", "見積"] },
+  { key: "請求書", patterns: ["請求書作成", "請求書"] },
+  { key: "商品発注書", patterns: ["商品発注書作成", "商品発注書", "商品発注"] },
+  { key: "外注発注書", patterns: ["外注発注書作成", "外注発注書", "外注発注"] },
+  { key: "実行予算", patterns: ["実行予算作成", "実行予算", "予算作成", "予算"] },
+];
 
-/**
- * ステップ1: 基本変動値の計算
- */
-function calculateVariation(
-  current: UsageData,
-  previous?: PreviousPeriodData
-): {
-  basicUsage: number;
-  estimateUsage: number;
-  constructionUsage: number;
-  activeRate: number;
-  trend: number;
-} {
-  let basicUsage = 0;
-  let estimateUsage = 0;
-  let constructionUsage = 0;
-  let activeRate = 0;
-  let trend = 0;
+export const PERIPHERAL_FEATURE_DEFINITIONS = [
+  { key: "業者登録", patterns: ["業者登録", "業者"] },
+  { key: "現場連絡表", patterns: ["現場連絡表作成", "現場連絡表", "現場連絡"] },
+  { key: "メール送信", patterns: ["メール送信", "書類メール", "書類メール送信"] },
+  { key: "資料登録", patterns: ["資料登録", "資料"] },
+  { key: "写真登録", patterns: ["写真登録", "写真"] },
+  { key: "工程表", patterns: ["工程表作成", "工程表"] },
+  { key: "タスク", patterns: ["タスク登録", "タスク"] },
+  { key: "日報", patterns: ["日報登録", "日報"] },
+  { key: "その他", patterns: ["その他"] },
+];
 
-  // 基本利用（ログインなし かつ その他15機能の合計利用回数も0）
-  // ログイン回数が0かつ、その他15機能の合計利用回数も0の場合のみ-40点を適用
-  if (current.login_count === 0) {
-    const otherFeaturesTotal = current.other_features_total ?? 0;
-    if (otherFeaturesTotal === 0) {
-      basicUsage = -40;
-    }
-  }
+const IMPACT_THRESHOLD = 55000;
+const IMPACT_MULTIPLIER = 1.5;
+const CORE_POINT = 10;
+const CONTINUATION_MAX = 10;
+const CONTINUATION_PARTIAL = 5;
+const PERIPHERAL_POINT = 20 / 9;
 
-  // 見積未利用
-  if (current.est_count === 0) {
-    estimateUsage = -15;
-  }
-
-  // 工事未利用
-  if (current.const_count === 0) {
-    constructionUsage = -15;
-  }
-
-  // Active率
-  if (current.active_rate < 10) {
-    activeRate = -15;
-  } else if (current.active_rate > 50) {
-    activeRate = 10;
-  }
-
-  // トレンド（前期間比）
-  if (previous) {
-    const loginChange =
-      previous.login_count > 0
-        ? ((current.login_count - previous.login_count) /
-            previous.login_count) *
-          100
-        : current.login_count > 0
-        ? 100
-        : 0;
-
-    // 大幅減少（20%以上減少）
-    if (loginChange <= -20) {
-      trend = -10;
-    }
-    // 増加・開始（未利用からの開始、または10%以上増加）
-    else if (
-      (previous.login_count === 0 && current.login_count > 0) ||
-      loginChange >= 10
-    ) {
-      trend = 10;
-    }
-  } else {
-    // 前期データがない場合、新規開始として扱う
-    if (current.login_count > 0) {
-      trend = 10;
-    }
-  }
-
-  return {
-    basicUsage,
-    estimateUsage,
-    constructionUsage,
-    activeRate,
-    trend,
-  };
+function normalizeText(value: string): string {
+  return value.toLowerCase().replace(/[\s　_]/g, "");
 }
 
-/**
- * ステップ2: インパクト係数の適用
- */
-function applyImpactMultiplier(
-  variationTotal: number,
-  mrc: number
-): number {
-  if (mrc >= IMPACT_THRESHOLD) {
-    return variationTotal * IMPACT_MULTIPLIER;
+function normalizeActivityData(activityData: ActivityData): ActivityEntry[] {
+  if (Array.isArray(activityData)) {
+    return activityData.map((entry) => ({
+      name: entry.name,
+      count: Number(entry.count || 0),
+    }));
   }
-  return variationTotal;
+
+  return Object.entries(activityData).map(([name, count]) => ({
+    name,
+    count: Number(count || 0),
+  }));
 }
 
-/**
- * ステップ3: 最終スコアの計算
- */
-function calculateFinalScore(variationTotal: number): number {
-  return Math.max(0, Math.min(100, 100 + variationTotal));
+function matchesPattern(name: string, pattern: string): boolean {
+  const normalizedName = normalizeText(name);
+  const normalizedPattern = normalizeText(pattern);
+  return (
+    normalizedName.includes(normalizedPattern) ||
+    normalizedPattern.includes(normalizedName)
+  );
 }
 
-/**
- * ステータスの判定
- */
+function hasUsage(entries: ActivityEntry[], patterns: string[]): boolean {
+  return entries.some(
+    (entry) =>
+      entry.count > 0 && patterns.some((pattern) => matchesPattern(entry.name, pattern))
+  );
+}
+
+function isMatchedByDefinitions(
+  entryName: string,
+  definitions: { patterns: string[] }[]
+): boolean {
+  return definitions.some((definition) =>
+    definition.patterns.some((pattern) => matchesPattern(entryName, pattern))
+  );
+}
+
+function round2(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+function clampScore(value: number): number {
+  return Math.max(0, Math.min(100, value));
+}
+
 function determineStatus(score: number): "Excellent" | "Stable" | "Warning" | "Critical" {
-  if (score >= 90) {
-    return "Excellent";
-  } else if (score >= 70) {
-    return "Stable";
-  } else if (score >= 50) {
-    return "Warning";
-  } else {
-    return "Critical";
-  }
+  if (score >= 90) return "Excellent";
+  if (score >= 70) return "Stable";
+  if (score >= 50) return "Warning";
+  return "Critical";
 }
 
-/**
- * メインのスコア算出関数
- */
-export function calculateHealthScore(
-  params: ScoreCalculationParams
-): ScoreResult {
-  const { currentPeriod, previousPeriod, mrc, periodType } = params;
+export function calculateHealthScore(params: ScoreCalculationParams): ScoreResult {
+  const { activityData, loginStats, customerProfile, previousScore } = params;
+  const entries = normalizeActivityData(activityData);
+  const workingDays = Math.max(1, Number(loginStats.workingDays || 0));
+  const loginDays = Math.max(0, Number(loginStats.loginDays || 0));
 
-  // ステップ1: 基本変動値の計算
-  const variations = calculateVariation(currentPeriod, previousPeriod);
+  // 継続利用
+  const loginRate = loginDays / workingDays;
+  const continuationScore =
+    loginRate >= 0.5 ? CONTINUATION_MAX : loginDays >= 1 ? CONTINUATION_PARTIAL : 0;
 
-  // 変動値の合計
-  const variationTotal =
-    variations.basicUsage +
-    variations.estimateUsage +
-    variations.constructionUsage +
-    variations.activeRate +
-    variations.trend;
+  // コア業務
+  const coreUsedCount = CORE_FEATURE_DEFINITIONS.filter((feature) =>
+    hasUsage(entries, feature.patterns)
+  ).length;
+  const coreScore = coreUsedCount * CORE_POINT;
 
-  // ステップ2: インパクト係数の適用
-  const adjustedVariation = applyImpactMultiplier(variationTotal, mrc);
+  // 周辺活用
+  const peripheralDefinitions = PERIPHERAL_FEATURE_DEFINITIONS.filter(
+    (feature) => feature.key !== "その他"
+  );
+  const peripheralUsedCount = peripheralDefinitions.filter((feature) =>
+    hasUsage(entries, feature.patterns)
+  ).length;
 
-  // ステップ3: 最終スコアの計算
-  const finalScore = calculateFinalScore(adjustedVariation);
+  const hasOtherUsage = entries.some(
+    (entry) =>
+      entry.count > 0 && !isMatchedByDefinitions(entry.name, [...CORE_FEATURE_DEFINITIONS, ...peripheralDefinitions])
+  );
 
-  // ステータスの判定
+  const peripheralScore = (peripheralUsedCount + (hasOtherUsage ? 1 : 0)) * PERIPHERAL_POINT;
+
+  // 素点
+  const rawScore = continuationScore + coreScore + peripheralScore;
+
+  // インパクト係数
+  const previousRawScore = previousScore?.rawScore ?? previousScore?.score ?? 0;
+  const isImpactCompany = Number(customerProfile.mrc || 0) >= IMPACT_THRESHOLD;
+  const dropAmount = previousRawScore > 0 ? previousRawScore - rawScore : 0;
+  const dropPercent = previousRawScore > 0 ? dropAmount / previousRawScore : 0;
+  const impactApplied = isImpactCompany && dropPercent >= 0.2 && dropAmount > 0;
+  const adjustedScore = impactApplied ? rawScore - dropAmount * 0.5 : rawScore;
+
+  const finalScore = clampScore(adjustedScore);
   const status = determineStatus(finalScore);
-  
+
   return {
     score: Math.round(finalScore),
     status,
     breakdown: {
-      baseScore: 100,
-      variationTotal, // インパクト係数適用前
-      adjustedVariation, // インパクト係数適用後
-      impactMultiplier: mrc >= IMPACT_THRESHOLD ? IMPACT_MULTIPLIER : 1,
+      continuation: round2(continuationScore),
+      core: round2(coreScore),
+      peripheral: round2(peripheralScore),
+      rawScore: round2(rawScore),
+      adjustedScore: round2(adjustedScore),
+      impactMultiplier: impactApplied ? IMPACT_MULTIPLIER : 1,
+      impactApplied,
+      impactDrop: round2(impactApplied ? dropAmount : 0),
       finalScore: Math.round(finalScore),
     },
-    details: variations,
   };
 }
 

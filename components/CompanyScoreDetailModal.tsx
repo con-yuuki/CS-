@@ -55,7 +55,6 @@ export function CompanyScoreDetailModal({
           score: healthScore.score,
           status: healthScore.status,
           breakdown: healthScore.breakdown,
-          details: healthScore.details,
         };
 
         // 利用ログの詳細を取得（raw_data用）
@@ -193,7 +192,7 @@ export function CompanyScoreDetailModal({
             loginCount: 0,
             estCount: 0,
             constCount: 0,
-            activeRate: healthScore.details?.activeRate || 0,
+            activeRate: 0,
             customerCount: 0,
             vendorCount: 0,
             invoiceCount: 0,
@@ -213,7 +212,6 @@ export function CompanyScoreDetailModal({
             score: healthScore.score,
             status: healthScore.status,
             breakdown: healthScore.breakdown,
-            details: healthScore.details,
           },
           periodType: healthScore.period_type,
         });
@@ -240,9 +238,9 @@ export function CompanyScoreDetailModal({
     }
   };
 
-  const formatVariation = (value: number) => {
-    if (value === 0) return "±0";
-    return value > 0 ? `+${value}` : `${value}`;
+  const formatPoints = (value: number) => {
+    if (Number.isInteger(value)) return `${value}`;
+    return value.toFixed(2);
   };
 
   return (
@@ -289,40 +287,46 @@ export function CompanyScoreDetailModal({
                       <div className="text-3xl font-bold">{healthScore.score}</div>
                     </div>
                     <div>
-                      <div className="text-sm text-gray-600">ベーススコア</div>
+                      <div className="text-sm text-gray-600">素点</div>
                       <div className="text-2xl font-semibold">
-                        {scoreDetails.scoreResult.breakdown.baseScore}
+                        {formatPoints(scoreDetails.scoreResult.breakdown.rawScore)}
                       </div>
                     </div>
                     <div>
-                      <div className="text-sm text-gray-600">変動値合計（係数適用前）</div>
+                      <div className="text-sm text-gray-600">継続利用</div>
                       <div className="text-2xl font-semibold">
-                        {formatVariation(scoreDetails.scoreResult.breakdown.variationTotal)}
+                        {formatPoints(scoreDetails.scoreResult.breakdown.continuation)}
                       </div>
                     </div>
                     <div>
-                      <div className="text-sm text-gray-600">インパクト係数</div>
+                      <div className="text-sm text-gray-600">コア業務</div>
                       <div className="text-2xl font-semibold">
-                        {scoreDetails.scoreResult.breakdown.impactMultiplier}x
+                        {formatPoints(scoreDetails.scoreResult.breakdown.core)}
                       </div>
                     </div>
                   </div>
                   <div className="pt-2 border-t">
-                    <div className="text-sm text-gray-600 mb-1">計算式</div>
+                    <div className="text-sm text-gray-600 mb-1">計算概要</div>
                     <div className="text-sm font-mono bg-gray-50 p-2 rounded">
-                      変動値合計（係数適用前）: {formatVariation(scoreDetails.scoreResult.breakdown.variationTotal)}
+                      継続利用: {formatPoints(scoreDetails.scoreResult.breakdown.continuation)}点
+                      <br />
+                      コア業務: {formatPoints(scoreDetails.scoreResult.breakdown.core)}点
+                      <br />
+                      周辺活用: {formatPoints(scoreDetails.scoreResult.breakdown.peripheral)}点
+                      <br />
+                      素点: {formatPoints(scoreDetails.scoreResult.breakdown.rawScore)}点
                       <br />
                       インパクト係数: {scoreDetails.scoreResult.breakdown.impactMultiplier}x
+                      {scoreDetails.scoreResult.breakdown.impactApplied && (
+                        <>
+                          <br />
+                          減少幅: {formatPoints(scoreDetails.scoreResult.breakdown.impactDrop)}点
+                          <br />
+                          調整後スコア: {formatPoints(scoreDetails.scoreResult.breakdown.adjustedScore)}点
+                        </>
+                      )}
                       <br />
-                      調整後変動値: {formatVariation(scoreDetails.scoreResult.breakdown.adjustedVariation || (scoreDetails.scoreResult.breakdown.variationTotal * scoreDetails.scoreResult.breakdown.impactMultiplier))}
-                      <br />
-                      最終スコア = max(0, min(100, ベーススコア + 調整後変動値))
-                      <br />
-                      = max(0, min(100, {scoreDetails.scoreResult.breakdown.baseScore} + {formatVariation(scoreDetails.scoreResult.breakdown.adjustedVariation || (scoreDetails.scoreResult.breakdown.variationTotal * scoreDetails.scoreResult.breakdown.impactMultiplier))}))
-                      <br />
-                      = max(0, min(100, {scoreDetails.scoreResult.breakdown.baseScore + (scoreDetails.scoreResult.breakdown.adjustedVariation || (scoreDetails.scoreResult.breakdown.variationTotal * scoreDetails.scoreResult.breakdown.impactMultiplier))}))
-                      <br />
-                      = {scoreDetails.scoreResult.score}
+                      最終スコア: {scoreDetails.scoreResult.score}
                     </div>
                   </div>
                 </div>
@@ -544,113 +548,38 @@ export function CompanyScoreDetailModal({
               </CardContent>
             </Card>
 
-            {/* スコア詳細（変動値） */}
+            {/* スコア詳細（カテゴリ別） */}
             <Card>
               <CardHeader>
-                <CardTitle>スコア詳細（変動値）</CardTitle>
+                <CardTitle>スコア詳細（カテゴリ別）</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
                   <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <div>
-                      <div className="font-semibold">基本利用（ログイン）</div>
-                      <div className="text-sm text-gray-600">
-                        {scoreDetails.currentLog.loginCount === 0
-                          ? "ログインなし"
-                          : `${scoreDetails.currentLog.loginCount}回`}
-                      </div>
+                      <div className="font-semibold">継続利用</div>
+                      <div className="text-sm text-gray-600">ログイン日数の達成度</div>
                     </div>
-                    <div
-                      className={`text-xl font-bold ${
-                        scoreDetails.scoreResult.details.basicUsage < 0
-                          ? "text-red-600"
-                          : "text-gray-600"
-                      }`}
-                    >
-                      {formatVariation(scoreDetails.scoreResult.details.basicUsage)}
+                    <div className="text-xl font-bold text-gray-600">
+                      {formatPoints(scoreDetails.scoreResult.breakdown.continuation)}
                     </div>
                   </div>
                   <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <div>
-                      <div className="font-semibold">見積未利用</div>
-                      <div className="text-sm text-gray-600">
-                        {scoreDetails.currentLog.estCount === 0
-                          ? "見積未作成"
-                          : `${scoreDetails.currentLog.estCount}件作成`}
-                      </div>
+                      <div className="font-semibold">コア業務</div>
+                      <div className="text-sm text-gray-600">主要7機能の利用</div>
                     </div>
-                    <div
-                      className={`text-xl font-bold ${
-                        scoreDetails.scoreResult.details.estimateUsage < 0
-                          ? "text-red-600"
-                          : "text-gray-600"
-                      }`}
-                    >
-                      {formatVariation(scoreDetails.scoreResult.details.estimateUsage)}
+                    <div className="text-xl font-bold text-gray-600">
+                      {formatPoints(scoreDetails.scoreResult.breakdown.core)}
                     </div>
                   </div>
                   <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <div>
-                      <div className="font-semibold">工事未利用</div>
-                      <div className="text-sm text-gray-600">
-                        {scoreDetails.currentLog.constCount === 0
-                          ? "工事未登録"
-                          : `${scoreDetails.currentLog.constCount}件登録`}
-                      </div>
+                      <div className="font-semibold">周辺活用</div>
+                      <div className="text-sm text-gray-600">周辺9機能の利用</div>
                     </div>
-                    <div
-                      className={`text-xl font-bold ${
-                        scoreDetails.scoreResult.details.constructionUsage < 0
-                          ? "text-red-600"
-                          : "text-gray-600"
-                      }`}
-                    >
-                      {formatVariation(scoreDetails.scoreResult.details.constructionUsage)}
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div>
-                      <div className="font-semibold">Active率</div>
-                      <div className="text-sm text-gray-600">
-                        {scoreDetails.currentLog.activeRate.toFixed(1)}%
-                        {scoreDetails.currentLog.activeRate < 10
-                          ? " (低Active)"
-                          : scoreDetails.currentLog.activeRate > 50
-                          ? " (高Active)"
-                          : ""}
-                      </div>
-                    </div>
-                    <div
-                      className={`text-xl font-bold ${
-                        scoreDetails.scoreResult.details.activeRate < 0
-                          ? "text-red-600"
-                          : scoreDetails.scoreResult.details.activeRate > 0
-                          ? "text-green-600"
-                          : "text-gray-600"
-                      }`}
-                    >
-                      {formatVariation(scoreDetails.scoreResult.details.activeRate)}
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                    <div>
-                      <div className="font-semibold">トレンド（前期間比）</div>
-                      <div className="text-sm text-gray-600">
-                        {scoreDetails.previousLog
-                          ? `前期: ${scoreDetails.previousLog.loginCount}回 → 当期: ${scoreDetails.currentLog.loginCount}回`
-                          : "前期データなし"}
-                      </div>
-                    </div>
-                    <div
-                      className={`text-xl font-bold ${
-                        scoreDetails.scoreResult.details.trend < 0
-                          ? "text-red-600"
-                          : scoreDetails.scoreResult.details.trend > 0
-                          ? "text-green-600"
-                          : "text-gray-600"
-                      }`}
-                    >
-                      {formatVariation(scoreDetails.scoreResult.details.trend)}
+                    <div className="text-xl font-bold text-gray-600">
+                      {formatPoints(scoreDetails.scoreResult.breakdown.peripheral)}
                     </div>
                   </div>
                 </div>
