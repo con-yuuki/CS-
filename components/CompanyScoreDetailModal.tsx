@@ -19,7 +19,6 @@ import { subWeeks, subMonths, format } from "date-fns";
 import { Loader2 } from "lucide-react";
 import { DynamicHealthScore } from "@/lib/services/dynamic-health-score-service";
 import { supabase } from "@/lib/supabase/client";
-import { supabase } from "@/lib/supabase/client";
 
 type UsageLog = Database["public"]["Tables"]["usage_logs"]["Row"];
 
