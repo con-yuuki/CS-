@@ -18,6 +18,8 @@ import { calculateHealthScore } from "@/lib/score-calculator";
 import { subWeeks, subMonths, format } from "date-fns";
 import { Loader2 } from "lucide-react";
 import { DynamicHealthScore } from "@/lib/services/dynamic-health-score-service";
+import { supabase } from "@/lib/supabase/client";
+import { supabase } from "@/lib/supabase/client";
 
 type UsageLog = Database["public"]["Tables"]["usage_logs"]["Row"];
 
@@ -43,6 +45,12 @@ export function CompanyScoreDetailModal({
     const fetchDetails = async () => {
       setIsLoading(true);
       try {
+        console.log("🔍 モーダルデータ取得開始:", {
+          tenant_id: healthScore.tenant_id,
+          period_type: healthScore.period_type,
+          period_date: healthScore.period_date,
+        });
+
         // healthScoreから直接スコア詳細を取得
         const scoreResult = {
           score: healthScore.score,
@@ -58,13 +66,17 @@ export function CompanyScoreDetailModal({
           healthScore.period_date
         );
 
+        console.log("📊 現在期間の利用ログ:", currentLog ? "取得成功" : "取得失敗");
+
         if (!currentLog) {
           // 別の期間タイプで試行
+          console.log("🔄 別の期間タイプで再試行");
           currentLog = await getUsageLogByPeriod(
             healthScore.tenant_id,
             healthScore.period_type === "weekly" ? "monthly" : "weekly",
             healthScore.period_date
           );
+          console.log("📊 再試行結果:", currentLog ? "取得成功" : "取得失敗");
         }
 
         // 前期間の利用ログを取得
@@ -116,6 +128,18 @@ export function CompanyScoreDetailModal({
           return 0;
         };
 
+        console.log("✅ スコア詳細を設定:", {
+          hasCurrentLog: !!currentLog,
+          hasPreviousLog: !!previousLog,
+          scoreDetails: {
+            currentLog: currentLog ? {
+              loginCount: currentLoginCount,
+              estCount: currentEstCount,
+              constCount: currentConstCount,
+            } : null,
+          },
+        });
+
         setScoreDetails({
           currentLog: {
             loginCount: currentLoginCount,
@@ -163,8 +187,37 @@ export function CompanyScoreDetailModal({
           periodType: healthScore.period_type,
         });
       } catch (error) {
-        console.error("スコア詳細の取得エラー:", error);
-        setScoreDetails(null);
+        console.error("❌ スコア詳細の取得エラー:", error);
+        // エラーが発生しても、healthScoreから取得できる情報は表示する
+        setScoreDetails({
+          currentLog: {
+            loginCount: 0,
+            estCount: 0,
+            constCount: 0,
+            activeRate: healthScore.details?.activeRate || 0,
+            customerCount: 0,
+            vendorCount: 0,
+            invoiceCount: 0,
+            productOrderCount: 0,
+            subcontractOrderCount: 0,
+            siteContactCount: 0,
+            budgetCount: 0,
+            documentEmailCount: 0,
+            documentCount: 0,
+            photoCount: 0,
+            scheduleCount: 0,
+            taskCount: 0,
+            dailyReportCount: 0,
+          },
+          previousLog: null,
+          scoreResult: {
+            score: healthScore.score,
+            status: healthScore.status,
+            breakdown: healthScore.breakdown,
+            details: healthScore.details,
+          },
+          periodType: healthScore.period_type,
+        });
       } finally {
         setIsLoading(false);
       }

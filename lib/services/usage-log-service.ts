@@ -47,7 +47,8 @@ export async function getUsageLogByPeriod(
       periodDate,
       error,
     });
-    throw error;
+    // エラーを投げずにnullを返す（モーダルが表示されなくなるのを防ぐ）
+    return null;
   }
   
   return data || null;
