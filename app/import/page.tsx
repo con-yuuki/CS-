@@ -10,7 +10,7 @@ import { Database } from "@/lib/supabase/database.types";
 
 type Company = Database["public"]["Tables"]["ユーザー基礎情報"]["Row"];
 import { upsertUsageLog } from "@/lib/services/usage-log-service";
-import { calculateAndSaveHealthScore } from "@/lib/services/health-score-service";
+import { calculateActiveRateForLog, setCompanyUsageStartDate, getCompanyUsageStartDate } from "@/lib/services/active-rate-service";
 import Link from "next/link";
 import { Upload, FileCheck, AlertCircle, CheckCircle2, Loader2, Info } from "lucide-react";
 
@@ -152,6 +152,68 @@ export default function ImportPage() {
           // 利用ログの作成または更新（数値型を確実に変換）
           try {
             console.log(`📝 行 ${rowNumber}: 利用ログを保存中... (テナントID: ${companyId})`);
+            
+            // 利用開始日を設定（初回の場合）
+            try {
+              const existingStartDate = await getCompanyUsageStartDate(companyId);
+              if (!existingStartDate) {
+                // 利用開始日が設定されていない場合、現在の期間日を利用開始日として設定
+                await setCompanyUsageStartDate(companyId, new Date(periodDate));
+                console.log(`📅 行 ${rowNumber}: 利用開始日を設定しました: ${periodDate}`);
+              }
+            } catch (error) {
+              console.warn(`⚠️ 行 ${rowNumber}: 利用開始日の設定に失敗しました（処理は続行）:`, error);
+            }
+            
+            // 利用ログを一時的に作成してActive率を計算
+            // raw_dataから詳細項目を取得
+            const rawData = row._original || {};
+            const getDetailValue = (keyPatterns: string[]): number => {
+              for (const pattern of keyPatterns) {
+                if (rawData[pattern] !== undefined) {
+                  return Number(rawData[pattern]) || 0;
+                }
+                // 部分一致を試す
+                for (const key in rawData) {
+                  if (key.includes(pattern) || pattern.includes(key)) {
+                    return Number(rawData[key]) || 0;
+                  }
+                }
+              }
+              return 0;
+            };
+            
+            const tempUsageLog = {
+              会社ID: String(companyId),
+              ログイン回数: Number(row.loginCount) || 0,
+              見積作成数: Number(row.estCount) || 0,
+              工事登録数: Number(row.constCount) || 0,
+              顧客登録数: getDetailValue(["顧客登録数", "顧客数", "顧客登録"]),
+              業者登録数: getDetailValue(["業者登録数", "業者数", "業者登録"]),
+              請求書作成数: getDetailValue(["請求書作成数", "請求書", "請求書作成"]),
+              商品発注書作成数: getDetailValue(["商品発注書作成数", "商品発注書", "商品発注"]),
+              外注発注書作成数: getDetailValue(["外注発注書作成数", "外注発注書", "外注発注"]),
+              現場連絡表作成数: getDetailValue(["現場連絡表作成数", "現場連絡表", "現場連絡"]),
+              実行予算作成数: getDetailValue(["実行予算作成数", "実行予算", "予算作成"]),
+              書類メール送信数: getDetailValue(["書類メール送信数", "書類メール", "メール送信"]),
+              資料登録数: getDetailValue(["資料登録数", "資料登録", "資料"]),
+              写真登録数: getDetailValue(["写真登録数", "写真登録", "写真"]),
+              工程表作成数: getDetailValue(["工程表作成数", "工程表", "工程表作成"]),
+              タスク登録数: getDetailValue(["タスク登録数", "タスク登録", "タスク"]),
+              日報登録数: getDetailValue(["日報登録数", "日報登録", "日報"]),
+            };
+            
+            // Active率を自動計算
+            let calculatedActiveRate = 0;
+            try {
+              calculatedActiveRate = await calculateActiveRateForLog(companyId, tempUsageLog as any);
+              console.log(`📊 行 ${rowNumber}: Active率を計算しました: ${calculatedActiveRate}%`);
+            } catch (error) {
+              console.warn(`⚠️ 行 ${rowNumber}: Active率の計算に失敗しました（デフォルト値0を使用）:`, error);
+              // 計算に失敗した場合は、インポートデータのActive率を使用（あれば）
+              calculatedActiveRate = Number(row.activeRate) || 0;
+            }
+            
             await upsertUsageLog({
               tenant_id: companyId,
               period_type: periodType,
@@ -159,7 +221,7 @@ export default function ImportPage() {
               login_count: Number(row.loginCount) || 0,
               est_count: Number(row.estCount) || 0,
               const_count: Number(row.constCount) || 0,
-              active_rate: Number(row.activeRate) || 0,
+              active_rate: calculatedActiveRate, // 計算したActive率を使用
               raw_data: row,
               companyName: row.companyName || (company ? company.name : undefined) || undefined,
             });
@@ -186,21 +248,7 @@ export default function ImportPage() {
             throw new Error(`利用ログの保存に失敗: ${errorMsg}`);
           }
 
-          // ヘルススコアの計算と保存
-          try {
-            console.log(`📊 行 ${rowNumber}: ヘルススコアを計算中... (テナントID: ${companyId})`);
-            await calculateAndSaveHealthScore(companyId, periodType, periodDate);
-            console.log(`✅ 行 ${rowNumber}: ヘルススコアを保存しました`);
-          } catch (error) {
-            const errorMsg = error instanceof Error ? error.message : "不明なエラー";
-            console.error(`❌ 行 ${rowNumber}: ヘルススコアの計算・保存に失敗`, {
-              tenantId: companyId,
-              error: errorMsg,
-              errorDetails: error,
-            });
-            // ヘルススコアのエラーは警告として記録するが、処理は続行
-            results.push(`⚠ 行 ${rowNumber}: ヘルススコアの計算に失敗しました (${errorMsg})`);
-          }
+          // スコアは動的に計算されるため、保存処理は不要
 
           successCount++;
           results.push(`✓ 行 ${rowNumber}: テナントID ${companyId} のデータをインポートしました`);

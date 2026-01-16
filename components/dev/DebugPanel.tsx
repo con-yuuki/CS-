@@ -72,3 +72,6 @@ export function DebugPanel({ data, title = "デバッグ情報" }: DebugPanelPro
   );
 }
 
+
+
+

@@ -94,3 +94,6 @@ cd "/Users/yuuki.takada/Desktop/CSアラート機能" && npm run dev
 
 **開発サーバーを起動すれば、404エラーは解決します！**
 
+
+
+

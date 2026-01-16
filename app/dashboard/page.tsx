@@ -2,8 +2,8 @@
 
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { getLatestHealthScores } from "@/lib/services/health-score-service";
 import { getCompanies } from "@/lib/services/company-service";
+import { getLatestDynamicHealthScores, DynamicHealthScore } from "@/lib/services/dynamic-health-score-service";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -12,13 +12,11 @@ import Link from "next/link";
 import { Search, Download, TrendingUp, TrendingDown, AlertTriangle } from "lucide-react";
 import { exportToExcel } from "@/lib/utils/excel-exporter";
 import { Database } from "@/lib/supabase/database.types";
+import { CompanyScoreDetailModal } from "@/components/CompanyScoreDetailModal";
 
-type HealthScore = Database["public"]["Tables"]["health_scores"]["Row"];
 type Company = Database["public"]["Tables"]["ユーザー基礎情報"]["Row"];
 
-interface HealthScoreWithCompany extends HealthScore {
-  company: Company;
-}
+interface HealthScoreWithCompany extends DynamicHealthScore {}
 
 export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -26,30 +24,20 @@ export default function DashboardPage() {
     "all" | "Excellent" | "Stable" | "Warning" | "Critical"
   >("all");
   const [showHighImpactOnly, setShowHighImpactOnly] = useState(false);
+  const [selectedItem, setSelectedItem] = useState<HealthScoreWithCompany | null>(null);
 
-  // ヘルススコアデータの取得
-  const { data: healthScores = [], isLoading: scoresLoading } = useQuery<HealthScore[]>({
-    queryKey: ["healthScores", "latest"],
-    queryFn: getLatestHealthScores,
-  });
-
-  // 企業データの取得
-  const { data: companies = [], isLoading: companiesLoading } = useQuery<Company[]>({
-    queryKey: ["companies"],
-    queryFn: getCompanies,
+  // ヘルススコアデータの取得（動的に計算）
+  const { data: healthScores = [], isLoading: scoresLoading } = useQuery<DynamicHealthScore[]>({
+    queryKey: ["healthScores", "latest", "dynamic"],
+    queryFn: getLatestDynamicHealthScores,
   });
 
   // データの結合とフィルタリング
   const filteredData = useMemo(() => {
-    const companyMap = new Map<number, Company>(companies.map((c) => [c.id, c]));
-
-    let combined: HealthScoreWithCompany[] = healthScores
-      .map((score) => {
-        const company = companyMap.get(score.tenant_id);
-        if (!company) return null;
-        return { ...score, company };
-      })
-      .filter((item): item is HealthScoreWithCompany => item !== null);
+    // healthScoresには既にcompanyが含まれている
+    let combined: HealthScoreWithCompany[] = healthScores.map((score) => ({
+      ...score,
+    }));
 
     // 検索フィルタ
     if (searchQuery) {
@@ -72,28 +60,23 @@ export default function DashboardPage() {
     }
 
     return combined.sort((a, b) => b.score - a.score);
-  }, [healthScores, companies, searchQuery, statusFilter, showHighImpactOnly]);
+  }, [healthScores, searchQuery, statusFilter, showHighImpactOnly]);
 
   // 統計情報の計算
   const stats = useMemo(() => {
-    const allData = healthScores.map((score) => {
-      const company = companies.find((c) => c.id === score.tenant_id);
-      return { score, company };
-    });
-
     const averageScore =
-      allData.length > 0
-        ? allData.reduce((sum, item) => sum + item.score.score, 0) / allData.length
+      healthScores.length > 0
+        ? healthScores.reduce((sum, item) => sum + item.score, 0) / healthScores.length
         : 0;
 
     const statusCounts = {
-      Excellent: allData.filter((item) => item.score.status === "Excellent").length,
-      Stable: allData.filter((item) => item.score.status === "Stable").length,
-      Warning: allData.filter((item) => item.score.status === "Warning").length,
-      Critical: allData.filter((item) => item.score.status === "Critical").length,
+      Excellent: healthScores.filter((item) => item.status === "Excellent").length,
+      Stable: healthScores.filter((item) => item.status === "Stable").length,
+      Warning: healthScores.filter((item) => item.status === "Warning").length,
+      Critical: healthScores.filter((item) => item.status === "Critical").length,
     };
 
-    const highImpactCount = allData.filter(
+    const highImpactCount = healthScores.filter(
       (item) => item.company && Number(item.company.mrc_ltv || 0) >= 55000
     ).length;
 
@@ -101,19 +84,23 @@ export default function DashboardPage() {
       averageScore: Math.round(averageScore),
       statusCounts,
       highImpactCount,
-      totalCount: allData.length,
+      totalCount: healthScores.length,
     };
-  }, [healthScores, companies]);
+  }, [healthScores]);
 
   const handleExport = () => {
     const exportData = filteredData.map((item) => ({
-      healthScore: item,
+      healthScore: {
+        ...item,
+        period_date: item.period_date,
+        created_at: new Date().toISOString(), // 動的計算のため現在時刻を使用
+      } as any,
       company: item.company,
     }));
     exportToExcel(exportData, `health_scores_${new Date().toISOString().split("T")[0]}.xlsx`);
   };
 
-  const isLoading = scoresLoading || companiesLoading;
+  const isLoading = scoresLoading;
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -252,8 +239,9 @@ export default function DashboardPage() {
                 const isHighImpact = Number(item.company.mrc_ltv || 0) >= 55000;
                 return (
                   <div
-                    key={item.id}
-                    className={`border rounded-lg p-4 hover:bg-gray-50 transition-colors ${
+                    key={item.tenant_id}
+                    onClick={() => setSelectedItem(item)}
+                    className={`border rounded-lg p-4 hover:bg-gray-50 transition-colors cursor-pointer ${
                       isHighImpact ? "border-yellow-300 bg-yellow-50/30" : ""
                     }`}
                   >
@@ -285,6 +273,12 @@ export default function DashboardPage() {
                           <span>月額契約額: ¥{Number(item.company.mrc_ltv || 0).toLocaleString()}</span>
                           <span>期間: {item.period_date}</span>
                         </div>
+                        {item.learningPeriodAlert?.hasAlert && (
+                          <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
+                            <AlertTriangle className="inline h-4 w-4 mr-1" />
+                            {item.learningPeriodAlert.message}
+                          </div>
+                        )}
                       </div>
                       <div className="text-right">
                         <div className="text-3xl font-bold">{item.score}</div>
@@ -298,6 +292,17 @@ export default function DashboardPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* 詳細モーダル */}
+      {selectedItem && (
+        <CompanyScoreDetailModal
+          open={!!selectedItem}
+          onOpenChange={(open) => {
+            if (!open) setSelectedItem(null);
+          }}
+          healthScore={selectedItem}
+        />
+      )}
     </div>
   );
 }

@@ -1,11 +1,12 @@
 import * as XLSX from "xlsx";
 import { Database } from "@/lib/supabase/database.types";
+import { DynamicHealthScore } from "@/lib/services/dynamic-health-score-service";
 
 type HealthScore = Database["public"]["Tables"]["health_scores"]["Row"];
 type Company = Database["public"]["Tables"]["ユーザー基礎情報"]["Row"];
 
 export interface ExportData {
-  healthScore: HealthScore;
+  healthScore: HealthScore | DynamicHealthScore;
   company: Company;
 }
 
@@ -20,8 +21,9 @@ export function exportToExcel(data: ExportData[], filename: string = "health_sco
     月額契約額: item.company.mrc_ltv || 0,
     スコア: item.healthScore.score,
     ステータス: item.healthScore.status,
-    期間: item.healthScore.period_date,
-    作成日時: item.healthScore.created_at,
+    期間: "period_date" in item.healthScore ? item.healthScore.period_date : 
+          "periodDate" in item.healthScore ? (item.healthScore as any).periodDate : "",
+    作成日時: "created_at" in item.healthScore ? item.healthScore.created_at : new Date().toISOString(),
   }));
 
   // ワークブックを作成

@@ -103,7 +103,8 @@ export async function upsertUsageLog(log: {
     社員数: null,
     顧客数: null,
     取り込み元ファイル名: null,
-  };
+    raw_data: log.raw_data || null,
+  } as any;
 
   // periodTypeに応じて対象月または対象週を設定
   if (log.period_type === "weekly") {

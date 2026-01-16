@@ -8,6 +8,7 @@ export interface UsageData {
   est_count: number;
   const_count: number;
   active_rate: number;
+  other_features_total?: number; // ログイン以外の15機能の合計利用回数
 }
 
 export interface PreviousPeriodData {
@@ -29,7 +30,8 @@ export interface ScoreResult {
   status: "Excellent" | "Stable" | "Warning" | "Critical";
   breakdown: {
     baseScore: number;
-    variationTotal: number;
+    variationTotal: number; // インパクト係数適用前
+    adjustedVariation: number; // インパクト係数適用後
     impactMultiplier: number;
     finalScore: number;
   };
@@ -64,9 +66,13 @@ function calculateVariation(
   let activeRate = 0;
   let trend = 0;
 
-  // 基本利用（ログインなし）
+  // 基本利用（ログインなし かつ その他15機能の合計利用回数も0）
+  // ログイン回数が0かつ、その他15機能の合計利用回数も0の場合のみ-40点を適用
   if (current.login_count === 0) {
-    basicUsage = -40;
+    const otherFeaturesTotal = current.other_features_total ?? 0;
+    if (otherFeaturesTotal === 0) {
+      basicUsage = -40;
+    }
   }
 
   // 見積未利用
@@ -186,13 +192,14 @@ export function calculateHealthScore(
 
   // ステータスの判定
   const status = determineStatus(finalScore);
-
+  
   return {
     score: Math.round(finalScore),
     status,
     breakdown: {
       baseScore: 100,
-      variationTotal,
+      variationTotal, // インパクト係数適用前
+      adjustedVariation, // インパクト係数適用後
       impactMultiplier: mrc >= IMPACT_THRESHOLD ? IMPACT_MULTIPLIER : 1,
       finalScore: Math.round(finalScore),
     },
