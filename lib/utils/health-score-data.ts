@@ -1,4 +1,4 @@
-import { ActivityEntry, CORE_FEATURE_DEFINITIONS, PERIPHERAL_FEATURE_DEFINITIONS, LoginStats } from "@/lib/score-calculator";
+import { ActivityEntry, SCORE_FEATURE_DEFINITIONS, LoginStats } from "@/lib/score-calculator";
 import { getFeatureCountFromRawData } from "@/lib/utils/feature-usage-helper";
 
 function normalizeText(value: string): string {
@@ -45,14 +45,29 @@ function getRawData(usageLog: any): Record<string, any> {
   return rawData;
 }
 
+const LOGIN_PATTERNS = ["ログイン回数", "ログイン数", "ログイン"];
+
+function getLoginCount(source: Record<string, any>): number {
+  return getCountByPatterns(source, LOGIN_PATTERNS);
+}
+
+function isLoginKey(key: string): boolean {
+  return LOGIN_PATTERNS.some((pattern) => matchesPattern(key, pattern));
+}
+
 export function buildActivityDataFromUsageLog(usageLog: any): ActivityEntry[] {
   const rawData = getRawData(usageLog);
   const entries: ActivityEntry[] = [];
 
-  const featureDefinitions = [
-    ...CORE_FEATURE_DEFINITIONS,
-    ...PERIPHERAL_FEATURE_DEFINITIONS.filter((feature) => feature.key !== "その他"),
-  ];
+  const featureDefinitions = SCORE_FEATURE_DEFINITIONS.filter((feature) => feature.key !== "その他");
+
+  const loginCount = Math.max(
+    getLoginCount(usageLog ?? {}),
+    getLoginCount(rawData)
+  );
+  if (loginCount > 0) {
+    entries.push({ name: "ログイン", count: loginCount });
+  }
 
   for (const feature of featureDefinitions) {
     const countFromLog = getCountByPatterns(usageLog ?? {}, feature.patterns);
@@ -66,6 +81,7 @@ export function buildActivityDataFromUsageLog(usageLog: any): ActivityEntry[] {
   for (const [key, value] of Object.entries(rawData)) {
     const numericValue = Number(value);
     if (!Number.isFinite(numericValue) || numericValue <= 0) continue;
+    if (isLoginKey(key)) continue;
     const matched = featureDefinitions.some((feature) =>
       feature.patterns.some((pattern) => matchesPattern(key, pattern))
     );
@@ -98,4 +114,5 @@ export function buildLoginStatsFromUsageLog(
     workingDays: Math.max(1, Number(workingDays || 0)),
   };
 }
+
 

@@ -14,11 +14,9 @@ import { Badge } from "@/components/ui/badge";
 import { AlertTriangle } from "lucide-react";
 import { Database } from "@/lib/supabase/database.types";
 import { getUsageLogByPeriod } from "@/lib/services/usage-log-service";
-import { calculateHealthScore } from "@/lib/score-calculator";
 import { subWeeks, subMonths, format } from "date-fns";
 import { Loader2 } from "lucide-react";
 import { DynamicHealthScore } from "@/lib/services/dynamic-health-score-service";
-import { supabase } from "@/lib/supabase/client";
 
 type UsageLog = Database["public"]["Tables"]["usage_logs"]["Row"];
 
@@ -293,42 +291,57 @@ export function CompanyScoreDetailModal({
                       </div>
                     </div>
                     <div>
-                      <div className="text-sm text-gray-600">継続利用</div>
+                      <div className="text-sm text-gray-600">利用機能数</div>
                       <div className="text-2xl font-semibold">
-                        {formatPoints(scoreDetails.scoreResult.breakdown.continuation)}
+                        {scoreDetails.scoreResult.breakdown.usedFeatureCount}/
+                        {scoreDetails.scoreResult.breakdown.totalFeatureCount}
                       </div>
                     </div>
                     <div>
-                      <div className="text-sm text-gray-600">コア業務</div>
+                      <div className="text-sm text-gray-600">ログイン</div>
                       <div className="text-2xl font-semibold">
-                        {formatPoints(scoreDetails.scoreResult.breakdown.core)}
+                        {scoreDetails.scoreResult.breakdown.loginUsed ? "有" : "無"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-600">トレンド</div>
+                      <div className="text-2xl font-semibold">
+                        {healthScore.trendStatus === "up"
+                          ? "上昇"
+                          : healthScore.trendStatus === "down"
+                          ? "下降"
+                          : "横ばい"}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-sm text-gray-600">前月比</div>
+                      <div className="text-2xl font-semibold">
+                        {healthScore.trendChangeRate > 0 ? "+" : ""}
+                        {healthScore.trendChangeRate}%
                       </div>
                     </div>
                   </div>
                   <div className="pt-2 border-t">
                     <div className="text-sm text-gray-600 mb-1">計算概要</div>
                     <div className="text-sm font-mono bg-gray-50 p-2 rounded">
-                      継続利用: {formatPoints(scoreDetails.scoreResult.breakdown.continuation)}点
+                      利用機能数: {scoreDetails.scoreResult.breakdown.usedFeatureCount}/
+                      {scoreDetails.scoreResult.breakdown.totalFeatureCount}
                       <br />
-                      コア業務: {formatPoints(scoreDetails.scoreResult.breakdown.core)}点
+                      ログイン: {scoreDetails.scoreResult.breakdown.loginUsed ? "有" : "無"}
                       <br />
-                      周辺活用: {formatPoints(scoreDetails.scoreResult.breakdown.peripheral)}点
+                      1項目あたり: {formatPoints(scoreDetails.scoreResult.breakdown.scorePerItem)}点
                       <br />
                       素点: {formatPoints(scoreDetails.scoreResult.breakdown.rawScore)}点
-                      <br />
-                      インパクト係数: {scoreDetails.scoreResult.breakdown.impactMultiplier}x
-                      {scoreDetails.scoreResult.breakdown.impactApplied && (
-                        <>
-                          <br />
-                          減少幅: {formatPoints(scoreDetails.scoreResult.breakdown.impactDrop)}点
-                          <br />
-                          調整後スコア: {formatPoints(scoreDetails.scoreResult.breakdown.adjustedScore)}点
-                        </>
-                      )}
                       <br />
                       最終スコア: {scoreDetails.scoreResult.score}
                     </div>
                   </div>
+                  {healthScore.trend.hasFeatureDrop && (
+                    <div className="mt-3 p-2 bg-red-50 border border-red-200 rounded text-sm text-red-800">
+                      <AlertTriangle className="inline h-4 w-4 mr-1" />
+                      利用停止: {healthScore.trend.droppedFeatures.join("、")}
+                    </div>
+                  )}
                 </div>
               </CardContent>
             </Card>
@@ -548,38 +561,39 @@ export function CompanyScoreDetailModal({
               </CardContent>
             </Card>
 
-            {/* スコア詳細（カテゴリ別） */}
+            {/* スコア詳細（項目別） */}
             <Card>
               <CardHeader>
-                <CardTitle>スコア詳細（カテゴリ別）</CardTitle>
+                <CardTitle>スコア詳細（項目別）</CardTitle>
               </CardHeader>
               <CardContent>
                 <div className="space-y-3">
                   <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <div>
-                      <div className="font-semibold">継続利用</div>
-                      <div className="text-sm text-gray-600">ログイン日数の達成度</div>
+                      <div className="font-semibold">利用機能数</div>
+                      <div className="text-sm text-gray-600">16機能の利用有無</div>
                     </div>
                     <div className="text-xl font-bold text-gray-600">
-                      {formatPoints(scoreDetails.scoreResult.breakdown.continuation)}
+                      {scoreDetails.scoreResult.breakdown.usedFeatureCount}/
+                      {scoreDetails.scoreResult.breakdown.totalFeatureCount}
                     </div>
                   </div>
                   <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <div>
-                      <div className="font-semibold">コア業務</div>
-                      <div className="text-sm text-gray-600">主要7機能の利用</div>
+                      <div className="font-semibold">ログイン</div>
+                      <div className="text-sm text-gray-600">期間内にログインがあるか</div>
                     </div>
                     <div className="text-xl font-bold text-gray-600">
-                      {formatPoints(scoreDetails.scoreResult.breakdown.core)}
+                      {scoreDetails.scoreResult.breakdown.loginUsed ? "有" : "無"}
                     </div>
                   </div>
                   <div className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
                     <div>
-                      <div className="font-semibold">周辺活用</div>
-                      <div className="text-sm text-gray-600">周辺9機能の利用</div>
+                      <div className="font-semibold">1項目あたり</div>
+                      <div className="text-sm text-gray-600">積み上げ方式の単価</div>
                     </div>
                     <div className="text-xl font-bold text-gray-600">
-                      {formatPoints(scoreDetails.scoreResult.breakdown.peripheral)}
+                      {formatPoints(scoreDetails.scoreResult.breakdown.scorePerItem)}
                     </div>
                   </div>
                 </div>
@@ -595,4 +609,5 @@ export function CompanyScoreDetailModal({
     </Dialog>
   );
 }
+
 

@@ -59,7 +59,12 @@ export default function DashboardPage() {
       combined = combined.filter((item) => Number(item.company.mrc_ltv || 0) >= 55000);
     }
 
-    return combined.sort((a, b) => b.score - a.score);
+    return combined.sort((a, b) => {
+      if (a.displayPriority !== b.displayPriority) {
+        return a.displayPriority === "max" ? -1 : 1;
+      }
+      return b.score - a.score;
+    });
   }, [healthScores, searchQuery, statusFilter, showHighImpactOnly]);
 
   // 統計情報の計算
@@ -237,18 +242,28 @@ export default function DashboardPage() {
             <div className="space-y-2">
               {filteredData.map((item) => {
                 const isHighImpact = Number(item.company.mrc_ltv || 0) >= 55000;
+                const isPriorityMax = item.displayPriority === "max";
                 return (
                   <div
                     key={item.tenant_id}
                     onClick={() => setSelectedItem(item)}
                     className={`border rounded-lg p-4 hover:bg-gray-50 transition-colors cursor-pointer ${
-                      isHighImpact ? "border-yellow-300 bg-yellow-50/30" : ""
+                      isPriorityMax
+                        ? "border-red-300 bg-red-50/40"
+                        : isHighImpact
+                        ? "border-yellow-300 bg-yellow-50/30"
+                        : ""
                     }`}
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-2">
                           <h3 className="font-semibold text-lg">{item.company.name}</h3>
+                          {isPriorityMax && (
+                            <Badge variant="outline" className="bg-red-100 text-red-800">
+                              優先対応
+                            </Badge>
+                          )}
                           {isHighImpact && (
                             <Badge variant="outline" className="bg-yellow-100 text-yellow-800">
                               インパクト企業
@@ -272,6 +287,18 @@ export default function DashboardPage() {
                           <span>企業ID: {item.company.id}</span>
                           <span>月額契約額: ¥{Number(item.company.mrc_ltv || 0).toLocaleString()}</span>
                           <span>期間: {item.period_date}</span>
+                          <span>
+                            トレンド:{" "}
+                            {item.trendStatus === "up"
+                              ? "上昇"
+                              : item.trendStatus === "down"
+                              ? "下降"
+                              : "横ばい"}
+                          </span>
+                          <span>
+                            前月比: {item.trendChangeRate > 0 ? "+" : ""}
+                            {item.trendChangeRate}%
+                          </span>
                         </div>
                         {item.learningPeriodAlert?.hasAlert && (
                           <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">

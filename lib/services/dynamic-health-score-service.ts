@@ -1,6 +1,6 @@
 import { getCompanies } from "./company-service";
 import { getUsageLogs } from "./usage-log-service";
-import { calculateHealthScore } from "@/lib/score-calculator";
+import { calculateHealthScore, calculateTrend, TrendResult, TrendStatus } from "@/lib/score-calculator";
 import { Database } from "@/lib/supabase/database.types";
 import { format } from "date-fns";
 import { checkLearningPeriodAlert } from "./learning-period-alert-service";
@@ -13,18 +13,19 @@ export interface DynamicHealthScore {
   tenant_id: number;
   score: number;
   status: "Excellent" | "Stable" | "Warning" | "Critical";
+  trendStatus: TrendStatus;
+  trendChangeRate: number;
+  trend: TrendResult;
+  displayPriority: "max" | "normal";
   period_date: string;
   period_type: "weekly" | "monthly";
   company: Company;
   breakdown: {
-    continuation: number;
-    core: number;
-    peripheral: number;
+    loginUsed: boolean;
+    usedFeatureCount: number;
+    totalFeatureCount: number;
+    scorePerItem: number;
     rawScore: number;
-    adjustedScore: number;
-    impactMultiplier: number;
-    impactApplied: boolean;
-    impactDrop: number;
     finalScore: number;
   };
   learningPeriodAlert?: {
@@ -112,22 +113,16 @@ export async function getLatestDynamicHealthScores(): Promise<DynamicHealthScore
     const activityData = buildActivityDataFromUsageLog(currentLog);
     const loginStats = buildLoginStatsFromUsageLog(currentLog, periodType);
 
-    const previousScore = previousLog
-      ? calculateHealthScore({
-          activityData: buildActivityDataFromUsageLog(previousLog),
-          loginStats: buildLoginStatsFromUsageLog(previousLog, periodType),
-          customerProfile: { mrc: Number(company.mrc_ltv || 0) },
-        })
-      : undefined;
-
     const scoreResult = calculateHealthScore({
       activityData,
       loginStats,
-      customerProfile: { mrc: Number(company.mrc_ltv || 0) },
-      previousScore: previousScore
-        ? { rawScore: previousScore.breakdown.rawScore, score: previousScore.score }
-        : undefined,
     });
+
+    const previousActivityData = previousLog ? buildActivityDataFromUsageLog(previousLog) : undefined;
+    const trend = calculateTrend(activityData, previousActivityData);
+    const isHighImpact = Number(company.mrc_ltv || 0) >= 55000;
+    const displayPriority: "max" | "normal" =
+      isHighImpact && trend.status === "down" ? "max" : "normal";
     
     // 学習期間アラートをチェック
     let learningPeriodAlert = { hasAlert: false, message: "" };
@@ -145,6 +140,10 @@ export async function getLatestDynamicHealthScores(): Promise<DynamicHealthScore
       tenant_id: company.id,
       score: scoreResult.score,
       status: scoreResult.status,
+      trendStatus: trend.status,
+      trendChangeRate: trend.changePercent,
+      trend,
+      displayPriority,
       period_date: latestPeriodDateStr,
       period_type: periodType,
       company,

@@ -114,21 +114,9 @@ export async function calculateAndSaveHealthScore(
   const activityData = buildActivityDataFromUsageLog(currentLog);
   const loginStats = buildLoginStatsFromUsageLog(currentLog, periodType);
 
-  const previousScore = previousLog
-    ? calculateHealthScore({
-        activityData: buildActivityDataFromUsageLog(previousLog),
-        loginStats: buildLoginStatsFromUsageLog(previousLog, periodType),
-        customerProfile: { mrc: Number(company.mrc_ltv || 0) },
-      })
-    : undefined;
-
   const scoreResult = calculateHealthScore({
     activityData,
     loginStats,
-    customerProfile: { mrc: Number(company.mrc_ltv || 0) },
-    previousScore: previousScore
-      ? { rawScore: previousScore.breakdown.rawScore, score: previousScore.score }
-      : undefined,
   });
 
   // データベースに保存
