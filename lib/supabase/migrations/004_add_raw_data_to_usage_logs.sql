@@ -1,0 +1,3 @@
+ALTER TABLE usage_logs
+  ADD COLUMN IF NOT EXISTS raw_data JSONB;
+

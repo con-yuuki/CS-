@@ -1,17 +1,20 @@
 import { supabase } from "@/lib/supabase/client";
 import { Database } from "@/lib/supabase/database.types";
-import { calculateHealthScore } from "@/lib/score-calculator";
-import { getUsageLogByPeriod } from "./usage-log-service";
+import { calculateHealthScore, type FeatureCounts } from "@/lib/score-calculator";
+import { getUsageLogByPeriod, getUsageLogs } from "./usage-log-service";
 import { getCompanyById } from "./company-service";
 import { subWeeks, subMonths, format } from "date-fns";
-import { buildActivityDataFromUsageLog, buildLoginStatsFromUsageLog } from "@/lib/utils/health-score-data";
 
 type HealthScore = Database["public"]["Tables"]["health_scores"]["Row"];
 type HealthScoreInsert = Database["public"]["Tables"]["health_scores"]["Insert"];
 type UsageLog = Database["public"]["Tables"]["usage_logs"]["Row"];
 type CompanyRow = Database["public"]["Tables"]["ユーザー基礎情報"]["Row"];
 
-export async function getHealthScores(tenantId?: number, periodDate?: string) {
+export async function getHealthScores(
+  tenantId?: number,
+  periodDate?: string,
+  periodType?: "weekly" | "monthly"
+) {
   let query = supabase
     .from("health_scores")
     .select("*")
@@ -25,17 +28,24 @@ export async function getHealthScores(tenantId?: number, periodDate?: string) {
     query = query.eq("period_date", periodDate);
   }
 
+  if (periodType) {
+    query = query.eq("period_type", periodType);
+  }
+
   const { data, error } = await query;
 
   if (error) throw error;
   return data;
 }
 
-export async function getLatestHealthScores(): Promise<HealthScore[]> {
+export async function getLatestHealthScores(
+  periodType: "weekly" | "monthly" = "monthly"
+): Promise<HealthScore[]> {
   // 最新の期間のスコアを取得
   const { data: latestScores, error: scoreError } = await supabase
     .from("health_scores")
     .select("period_date")
+    .eq("period_type", periodType)
     .order("period_date", { ascending: false })
     .limit(1);
 
@@ -51,6 +61,7 @@ export async function getLatestHealthScores(): Promise<HealthScore[]> {
     .from("health_scores")
     .select("*")
     .eq("period_date", latestDate)
+    .eq("period_type", periodType)
     .order("score", { ascending: false });
 
   if (error) throw error;
@@ -111,12 +122,70 @@ export async function calculateAndSaveHealthScore(
     previousDate
   );
 
-  const activityData = buildActivityDataFromUsageLog(currentLog);
-  const loginStats = buildLoginStatsFromUsageLog(currentLog, periodType);
+  const extractFeatureCounts = (log: UsageLog | null): FeatureCounts => {
+    if (!log) return {};
+    const rawData = (log as any).raw_data ?? (log as any).rawData;
+    const excludedKeys = [
+      "id",
+      "ID",
+      "テナントID",
+      "tenant_id",
+      "tenantId",
+      "会社ID",
+      "会社名",
+      "企業名",
+      "name",
+      "period",
+      "period_date",
+      "periodDate",
+      "日付",
+      "対象月",
+      "対象週",
+      "ログイン回数",
+      "login_count",
+      "見積作成数",
+      "est_count",
+      "工事登録数",
+      "const_count",
+      "Active率",
+      "active_rate",
+    ];
+
+    if (rawData && typeof rawData === "object") {
+      const counts: FeatureCounts = {};
+      Object.entries(rawData as Record<string, unknown>).forEach(([key, value]) => {
+        if (excludedKeys.includes(key)) return;
+        const num = Number(value);
+        if (!Number.isNaN(num)) {
+          counts[key] = num;
+        }
+      });
+      if (Object.keys(counts).length > 0) {
+        return counts;
+      }
+    }
+
+    return {
+      estimate: Number(log.見積作成数 || 0),
+      construction: Number(log.工事登録数 || 0),
+    };
+  };
+
+  const currentLoginCount = Number(currentLog.ログイン回数 || 0);
+  const previousLoginCount = previousLog ? Number(previousLog.ログイン回数 || 0) : 0;
 
   const scoreResult = calculateHealthScore({
-    activityData,
-    loginStats,
+    currentPeriod: {
+      login_count: currentLoginCount,
+      feature_counts: extractFeatureCounts(currentLog),
+    },
+    previousPeriod: previousLog
+      ? {
+          login_count: previousLoginCount,
+          feature_counts: extractFeatureCounts(previousLog),
+        }
+      : undefined,
+    mrc: Number(company.mrc_ltv || 0),
   });
 
   // データベースに保存
@@ -125,12 +194,16 @@ export async function calculateAndSaveHealthScore(
     score: scoreResult.score,
     status: scoreResult.status,
     period_date: periodDate,
+    period_type: periodType,
+    trend_change_pct: scoreResult.trendChangePct,
+    trend_status: scoreResult.trendStatus,
+    zeroed_feature_alert: scoreResult.zeroedFeatureAlert,
   };
 
   const { data, error } = await (supabase as any)
     .from("health_scores")
     .upsert(healthScore, {
-      onConflict: "tenant_id,period_date",
+      onConflict: "tenant_id,period_type,period_date",
     })
     .select()
     .single();
@@ -150,11 +223,26 @@ export async function createHealthScore(score: HealthScoreInsert) {
   return data;
 }
 
-export async function getHealthScoreHistory(tenantId: number) {
+export async function getHealthScoreHistory(
+  tenantId: number,
+  periodType: "weekly" | "monthly"
+) {
   const { data, error } = await supabase
     .from("health_scores")
     .select("*")
     .eq("tenant_id", tenantId)
+    .eq("period_type", periodType)
+    .order("period_date", { ascending: true });
+
+  if (error) throw error;
+  return data;
+}
+
+export async function getHealthScoreHistoryAll(periodType: "weekly" | "monthly") {
+  const { data, error } = await supabase
+    .from("health_scores")
+    .select("*")
+    .eq("period_type", periodType)
     .order("period_date", { ascending: true });
 
   if (error) throw error;

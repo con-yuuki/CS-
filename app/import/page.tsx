@@ -1,21 +1,22 @@
 "use client";
 
 import { useState, useCallback } from "react";
+import { format, isValid, parseISO, subDays, subMonths } from "date-fns";
 import { useDropzone } from "react-dropzone";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { parseExcelFile, validateParsedData, type ParsedRow } from "@/lib/utils/excel-parser";
-import { createCompany, getCompanyById } from "@/lib/services/company-service";
+import { getCompanyById } from "@/lib/services/company-service";
 import { Database } from "@/lib/supabase/database.types";
 
 type Company = Database["public"]["Tables"]["ユーザー基礎情報"]["Row"];
 import { upsertUsageLog } from "@/lib/services/usage-log-service";
-import { calculateActiveRateForLog, setCompanyUsageStartDate, getCompanyUsageStartDate } from "@/lib/services/active-rate-service";
+import { calculateAndSaveHealthScore } from "@/lib/services/health-score-service";
 import Link from "next/link";
 import { Upload, FileCheck, AlertCircle, CheckCircle2, Loader2, Info } from "lucide-react";
 
 export default function ImportPage() {
-  const [file, setFile] = useState<File | null>(null);
+  const [files, setFiles] = useState<File[]>([]);
   const [parsedData, setParsedData] = useState<ParsedRow[]>([]);
   const [validationErrors, setValidationErrors] = useState<string[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -27,44 +28,127 @@ export default function ImportPage() {
       tenantId?: number | string;
       companyName?: string;
       rowNumber: number;
+      fileName?: string;
     }>;
   } | null>(null);
   const [periodType, setPeriodType] = useState<"weekly" | "monthly">("monthly");
   const [periodDate, setPeriodDate] = useState<string>(
     new Date().toISOString().split("T")[0]
   );
-  const [detectedHeaders, setDetectedHeaders] = useState<string[]>([]);
+  const [detectedHeaders, setDetectedHeaders] = useState<
+    Array<{ fileName: string; headers: string[] }>
+  >([]);
+
+  const extractDateFromFileName = (fileName?: string) => {
+    if (!fileName) return undefined;
+    const fullMatch = fileName.match(
+      /(20\d{2})[.\-_/]?(0[1-9]|1[0-2])[.\-_/]?(0[1-9]|[12]\d|3[01])/
+    );
+    if (fullMatch) {
+      const [, year, month, day] = fullMatch;
+      return `${year}-${month}-${day}`;
+    }
+    const monthMatch = fileName.match(/(20\d{2})[.\-_/]?(0[1-9]|1[0-2])/);
+    if (!monthMatch) return undefined;
+    const [, year, month] = monthMatch;
+    return `${year}-${month}-01`;
+  };
+
+  const detectPeriodTypeFromFileName = (fileName?: string) => {
+    if (!fileName) return undefined;
+    const lower = fileName.toLowerCase();
+    if (lower.includes("monthly")) return "monthly" as const;
+    if (lower.includes("weekly")) return "weekly" as const;
+    return undefined;
+  };
+
+  const normalizePeriodDate = (value?: string) => {
+    if (!value) return undefined;
+    const trimmed = value.trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return trimmed;
+    if (/^\d{4}\/\d{2}\/\d{2}$/.test(trimmed)) return trimmed.replaceAll("/", "-");
+    if (/^\d{4}-\d{2}$/.test(trimmed)) return `${trimmed}-01`;
+    if (/^\d{4}\/\d{2}$/.test(trimmed)) return `${trimmed.replaceAll("/", "-")}-01`;
+    if (/^\d{6}$/.test(trimmed)) return `${trimmed.slice(0, 4)}-${trimmed.slice(4, 6)}-01`;
+    if (/^\d{8}$/.test(trimmed)) {
+      return `${trimmed.slice(0, 4)}-${trimmed.slice(4, 6)}-${trimmed.slice(6, 8)}`;
+    }
+    return trimmed;
+  };
+
+  const normalizeMonthlyDate = (value?: string) => {
+    if (!value) return value;
+    const normalized = normalizePeriodDate(value);
+    if (!normalized) return normalized;
+    if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
+      return `${normalized.slice(0, 7)}-01`;
+    }
+    if (/^\d{4}-\d{2}$/.test(normalized)) {
+      return `${normalized}-01`;
+    }
+    return normalized;
+  };
+
+  const shiftFileDateToPreviousMonth = (value?: string) => {
+    if (!value) return value;
+    const parsed = parseISO(value);
+    if (!isValid(parsed)) return value;
+    return format(subMonths(parsed, 1), "yyyy-MM-dd");
+  };
+
+  const shiftFileDateToPreviousWeek = (value?: string) => {
+    if (!value) return value;
+    const parsed = parseISO(value);
+    if (!isValid(parsed)) return value;
+    return format(subDays(parsed, 7), "yyyy-MM-dd");
+  };
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
     if (acceptedFiles.length === 0) return;
 
-    const selectedFile = acceptedFiles[0];
-    setFile(selectedFile);
+    setFiles(acceptedFiles);
     setValidationErrors([]);
     setProcessResult(null);
     setDetectedHeaders([]);
 
-    try {
-      const data = await parseExcelFile(selectedFile, periodType);
-      setParsedData(data);
+    const allData: ParsedRow[] = [];
+    const allHeaders: Array<{ fileName: string; headers: string[] }> = [];
+    const allErrors: string[] = [];
 
-      // 検出されたヘッダー名を取得
-      if (data.length > 0) {
-        const headers = Object.keys(data[0]).filter(
-          (key) => !key.startsWith("_")
+    for (const selectedFile of acceptedFiles) {
+      try {
+        const data = await parseExcelFile(selectedFile, periodType);
+
+        const enriched = data.map((row, index) => ({
+          ...row,
+          _sourceFile: selectedFile.name,
+          _sourceRowNumber: index + 2,
+        }));
+        allData.push(...enriched);
+
+        if (data.length > 0) {
+          const headers = Object.keys(data[0]).filter((key) => !key.startsWith("_"));
+          allHeaders.push({ fileName: selectedFile.name, headers });
+        }
+
+        const validation = validateParsedData(data);
+        if (!validation.valid) {
+          validation.errors.forEach((error) => {
+            allErrors.push(`${selectedFile.name}: ${error}`);
+          });
+        }
+      } catch (error) {
+        allErrors.push(
+          `${selectedFile.name}: ファイルの読み込みに失敗しました: ${
+            error instanceof Error ? error.message : "不明なエラー"
+          }`
         );
-        setDetectedHeaders(headers);
       }
-
-      const validation = validateParsedData(data);
-      if (!validation.valid) {
-        setValidationErrors(validation.errors);
-      }
-    } catch (error) {
-      setValidationErrors([
-        `ファイルの読み込みに失敗しました: ${error instanceof Error ? error.message : "不明なエラー"}`,
-      ]);
     }
+
+    setParsedData(allData);
+    setDetectedHeaders(allHeaders);
+    setValidationErrors(allErrors);
   }, [periodType]);
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
@@ -74,7 +158,7 @@ export default function ImportPage() {
       "application/vnd.ms-excel": [".xls"],
       "text/csv": [".csv"],
     },
-    multiple: false,
+    multiple: true,
   });
 
   const handleImport = async () => {
@@ -96,7 +180,24 @@ export default function ImportPage() {
 
     try {
       for (const row of parsedData) {
-        const rowNumber = parsedData.indexOf(row) + 2; // Excelの行番号（ヘッダー行を考慮）
+        const sourceFile = row._sourceFile as string | undefined;
+        const sourceRowNumber = row._sourceRowNumber as number | undefined;
+        const rowNumber = sourceRowNumber ?? parsedData.indexOf(row) + 2; // Excelの行番号（ヘッダー行を考慮）
+        const rawFileDate = extractDateFromFileName(sourceFile);
+        const filePeriodType = detectPeriodTypeFromFileName(sourceFile);
+        const fileDate =
+          filePeriodType === "weekly"
+            ? shiftFileDateToPreviousWeek(rawFileDate)
+            : shiftFileDateToPreviousMonth(rawFileDate);
+        const normalizedRowDate = normalizePeriodDate(row.periodDate ? String(row.periodDate) : undefined);
+        let effectivePeriodDate = filePeriodType
+          ? fileDate || normalizedRowDate || periodDate
+          : normalizedRowDate || fileDate || periodDate;
+        const effectivePeriodType = filePeriodType || periodType;
+
+        if (effectivePeriodType === "monthly") {
+          effectivePeriodDate = normalizeMonthlyDate(effectivePeriodDate);
+        }
         
         try {
           // 登録済み企業のみでデータを反映（新規作成は行わない）
@@ -106,8 +207,13 @@ export default function ImportPage() {
               tenantId: undefined,
               companyName: row.companyName,
               rowNumber,
+              fileName: sourceFile,
             });
-            results.push(`⚠ 行 ${rowNumber}: テナントIDが指定されていません (企業名: ${row.companyName || "不明"})`);
+            results.push(
+              `⚠ 行 ${rowNumber}${sourceFile ? ` (${sourceFile})` : ""}: テナントIDが指定されていません (企業名: ${
+                row.companyName || "不明"
+              })`
+            );
             continue;
           }
 
@@ -143,85 +249,28 @@ export default function ImportPage() {
               tenantId: row.tenantId,
               companyName: row.companyName,
               rowNumber,
+              fileName: sourceFile,
             });
             const errorMsg = error instanceof Error ? error.message : "不明なエラー";
-            results.push(`⚠ 行 ${rowNumber}: テナントID ${row.tenantId} は登録されていません (企業名: ${row.companyName || "不明"}) - ${errorMsg}`);
+            results.push(
+              `⚠ 行 ${rowNumber}${sourceFile ? ` (${sourceFile})` : ""}: テナントID ${
+                row.tenantId
+              } は登録されていません (企業名: ${row.companyName || "不明"}) - ${errorMsg}`
+            );
             continue;
           }
 
           // 利用ログの作成または更新（数値型を確実に変換）
           try {
             console.log(`📝 行 ${rowNumber}: 利用ログを保存中... (テナントID: ${companyId})`);
-            
-            // 利用開始日を設定（初回の場合）
-            try {
-              const existingStartDate = await getCompanyUsageStartDate(companyId);
-              if (!existingStartDate) {
-                // 利用開始日が設定されていない場合、現在の期間日を利用開始日として設定
-                await setCompanyUsageStartDate(companyId, new Date(periodDate));
-                console.log(`📅 行 ${rowNumber}: 利用開始日を設定しました: ${periodDate}`);
-              }
-            } catch (error) {
-              console.warn(`⚠️ 行 ${rowNumber}: 利用開始日の設定に失敗しました（処理は続行）:`, error);
-            }
-            
-            // 利用ログを一時的に作成してActive率を計算
-            // raw_dataから詳細項目を取得
-            const rawData = row._original || {};
-            const getDetailValue = (keyPatterns: string[]): number => {
-              for (const pattern of keyPatterns) {
-                if (rawData[pattern] !== undefined) {
-                  return Number(rawData[pattern]) || 0;
-                }
-                // 部分一致を試す
-                for (const key in rawData) {
-                  if (key.includes(pattern) || pattern.includes(key)) {
-                    return Number(rawData[key]) || 0;
-                  }
-                }
-              }
-              return 0;
-            };
-            
-            const tempUsageLog = {
-              会社ID: String(companyId),
-              ログイン回数: Number(row.loginCount) || 0,
-              見積作成数: Number(row.estCount) || 0,
-              工事登録数: Number(row.constCount) || 0,
-              顧客登録数: getDetailValue(["顧客登録数", "顧客数", "顧客登録"]),
-              業者登録数: getDetailValue(["業者登録数", "業者数", "業者登録"]),
-              請求書作成数: getDetailValue(["請求書作成数", "請求書", "請求書作成"]),
-              商品発注書作成数: getDetailValue(["商品発注書作成数", "商品発注書", "商品発注"]),
-              外注発注書作成数: getDetailValue(["外注発注書作成数", "外注発注書", "外注発注"]),
-              現場連絡表作成数: getDetailValue(["現場連絡表作成数", "現場連絡表", "現場連絡"]),
-              実行予算作成数: getDetailValue(["実行予算作成数", "実行予算", "予算作成"]),
-              書類メール送信数: getDetailValue(["書類メール送信数", "書類メール", "メール送信"]),
-              資料登録数: getDetailValue(["資料登録数", "資料登録", "資料"]),
-              写真登録数: getDetailValue(["写真登録数", "写真登録", "写真"]),
-              工程表作成数: getDetailValue(["工程表作成数", "工程表", "工程表作成"]),
-              タスク登録数: getDetailValue(["タスク登録数", "タスク登録", "タスク"]),
-              日報登録数: getDetailValue(["日報登録数", "日報登録", "日報"]),
-            };
-            
-            // Active率を自動計算
-            let calculatedActiveRate = 0;
-            try {
-              calculatedActiveRate = await calculateActiveRateForLog(companyId, tempUsageLog as any);
-              console.log(`📊 行 ${rowNumber}: Active率を計算しました: ${calculatedActiveRate}%`);
-            } catch (error) {
-              console.warn(`⚠️ 行 ${rowNumber}: Active率の計算に失敗しました（デフォルト値0を使用）:`, error);
-              // 計算に失敗した場合は、インポートデータのActive率を使用（あれば）
-              calculatedActiveRate = Number(row.activeRate) || 0;
-            }
-            
             await upsertUsageLog({
               tenant_id: companyId,
-              period_type: periodType,
-              period_date: periodDate,
+              period_type: effectivePeriodType,
+              period_date: effectivePeriodDate,
               login_count: Number(row.loginCount) || 0,
               est_count: Number(row.estCount) || 0,
               const_count: Number(row.constCount) || 0,
-              active_rate: calculatedActiveRate, // 計算したActive率を使用
+              active_rate: Number(row.activeRate) || 0,
               raw_data: row,
               companyName: row.companyName || (company ? company.name : undefined) || undefined,
             });
@@ -240,7 +289,9 @@ export default function ImportPage() {
             if (errorCode === 'PGRST204' || errorMsg.includes('406') || errorMsg.includes('Not Acceptable')) {
               console.warn(`⚠️ 行 ${rowNumber}: usage_logsテーブルへのアクセスが拒否されました。日本語カラム名の問題の可能性があります。`);
               // この場合は警告として記録するが、処理は続行
-              results.push(`⚠ 行 ${rowNumber}: 利用ログの保存に失敗しました（テーブルアクセスエラー）。データは保存されませんでした。`);
+              results.push(
+                `⚠ 行 ${rowNumber}${sourceFile ? ` (${sourceFile})` : ""}: 利用ログの保存に失敗しました（テーブルアクセスエラー）。データは保存されませんでした。`
+              );
               // 利用ログの保存に失敗した場合は、ヘルススコアの計算もスキップ
               continue;
             }
@@ -248,10 +299,28 @@ export default function ImportPage() {
             throw new Error(`利用ログの保存に失敗: ${errorMsg}`);
           }
 
-          // スコアは動的に計算されるため、保存処理は不要
+          // ヘルススコアの計算と保存
+          try {
+            console.log(`📊 行 ${rowNumber}: ヘルススコアを計算中... (テナントID: ${companyId})`);
+            await calculateAndSaveHealthScore(companyId, effectivePeriodType, effectivePeriodDate);
+            console.log(`✅ 行 ${rowNumber}: ヘルススコアを保存しました`);
+          } catch (error) {
+            const errorMsg = error instanceof Error ? error.message : "不明なエラー";
+            console.error(`❌ 行 ${rowNumber}: ヘルススコアの計算・保存に失敗`, {
+              tenantId: companyId,
+              error: errorMsg,
+              errorDetails: error,
+            });
+            // ヘルススコアのエラーは警告として記録するが、処理は続行
+            results.push(
+              `⚠ 行 ${rowNumber}${sourceFile ? ` (${sourceFile})` : ""}: ヘルススコアの計算に失敗しました (${errorMsg})`
+            );
+          }
 
           successCount++;
-          results.push(`✓ 行 ${rowNumber}: テナントID ${companyId} のデータをインポートしました`);
+          results.push(
+            `✓ 行 ${rowNumber}${sourceFile ? ` (${sourceFile})` : ""}: テナントID ${companyId} のデータをインポートしました`
+          );
         } catch (error) {
           errorCount++;
           const errorMsg = error instanceof Error ? error.message : "不明なエラー";
@@ -261,43 +330,22 @@ export default function ImportPage() {
             stack: errorStack,
             fullError: error,
           });
-          results.push(`✗ 行 ${rowNumber}: ${errorMsg}`);
+          results.push(
+            `✗ 行 ${rowNumber}${sourceFile ? ` (${sourceFile})` : ""}: ${errorMsg}`
+          );
         }
       }
 
-      // 環境変数の確認メッセージを追加
-      const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-      const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-      
-      let finalMessage = `${successCount}件のデータをインポートしました`;
-      if (errorCount > 0) {
-        finalMessage += `（エラー: ${errorCount}件）`;
-      }
-      if (unregisteredCompanies.length > 0) {
-        finalMessage += `（未登録企業: ${unregisteredCompanies.length}件）`;
-      }
-      
-      // 環境変数が設定されていない場合の警告
-      if (!supabaseUrl || !supabaseAnonKey) {
-        finalMessage += '\n\n⚠️ 警告: Supabase環境変数が設定されていません。Vercelの環境変数を確認してください。';
-        if (!supabaseUrl) {
-          results.push('❌ NEXT_PUBLIC_SUPABASE_URL が設定されていません');
-        }
-        if (!supabaseAnonKey) {
-          results.push('❌ NEXT_PUBLIC_SUPABASE_ANON_KEY が設定されていません');
-        }
-      }
-      
       setProcessResult({
-        success: errorCount === 0 && unregisteredCompanies.length === 0,
-        message: finalMessage,
+        success: errorCount === 0,
+        message: `${successCount}件のデータをインポートしました${errorCount > 0 ? `（エラー: ${errorCount}件）` : ""}${unregisteredCompanies.length > 0 ? `（未登録企業: ${unregisteredCompanies.length}件）` : ""}`,
         details: results,
         unregisteredCompanies: unregisteredCompanies.length > 0 ? unregisteredCompanies : undefined,
       });
 
       // 成功時はデータをクリア
       if (errorCount === 0) {
-        setFile(null);
+        setFiles([]);
         setParsedData([]);
         setDetectedHeaders([]);
       }
@@ -311,11 +359,6 @@ export default function ImportPage() {
     }
   };
 
-  // 環境変数の確認
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const envVarsConfigured = supabaseUrl && supabaseAnonKey;
-
   return (
     <div className="container mx-auto px-4 py-8">
       <div className="mb-6">
@@ -324,44 +367,11 @@ export default function ImportPage() {
         </Link>
       </div>
 
-      {/* 環境変数の確認表示 */}
-      {!envVarsConfigured && (
-        <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <AlertCircle className="h-5 w-5 text-yellow-500" />
-            <h3 className="font-medium text-yellow-800">⚠️ Supabase環境変数が設定されていません</h3>
-          </div>
-          <p className="text-sm text-yellow-700 mb-2">
-            インポート機能を使用するには、Vercelの環境変数を設定する必要があります。
-          </p>
-          <div className="text-xs text-yellow-600 space-y-1">
-            {!supabaseUrl && <p>❌ NEXT_PUBLIC_SUPABASE_URL が設定されていません</p>}
-            {!supabaseAnonKey && <p>❌ NEXT_PUBLIC_SUPABASE_ANON_KEY が設定されていません</p>}
-          </div>
-          <div className="mt-3 p-3 bg-yellow-100 rounded text-xs text-yellow-800">
-            <p className="font-medium mb-1">📝 解決方法:</p>
-            <ol className="list-decimal list-inside space-y-1">
-              <li>Vercelダッシュボードの「Settings」→「Environment Variables」に移動</li>
-              <li>以下の環境変数を追加：
-                <ul className="list-disc list-inside ml-4 mt-1">
-                  <li>NEXT_PUBLIC_SUPABASE_URL: https://hcceyhmisbmclqrgfedr.supabase.co</li>
-                  <li>NEXT_PUBLIC_SUPABASE_ANON_KEY: （Supabaseのanon key）</li>
-                </ul>
-              </li>
-              <li>環境変数を追加後、再デプロイを実行</li>
-            </ol>
-            <p className="mt-2">
-              💡 詳細は <code className="bg-yellow-200 px-1 rounded">FIX_VERCEL_ENV.md</code> を参照してください。
-            </p>
-          </div>
-        </div>
-      )}
-
       <Card className="max-w-4xl mx-auto">
         <CardHeader>
           <CardTitle>データインポート</CardTitle>
           <CardDescription>
-            Excel/CSVファイルをドラッグ&ドロップして、利用ログデータをインポートします
+            Excel/CSVファイルをドラッグ&ドロップして、利用ログデータをインポートします（複数ファイル対応）
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -377,6 +387,9 @@ export default function ImportPage() {
                 <option value="weekly">週次</option>
                 <option value="monthly">月次</option>
               </select>
+              <p className="mt-1 text-xs text-muted-foreground">
+                ファイル名に <span className="font-semibold">monthly</span> / <span className="font-semibold">weekly</span> を含む場合は自動判定されます。
+              </p>
             </div>
             <div>
               <label className="block text-sm font-medium mb-2">期間日</label>
@@ -400,13 +413,17 @@ export default function ImportPage() {
           >
             <input {...getInputProps()} />
             <Upload className="mx-auto h-12 w-12 text-gray-400 mb-4" />
-            {file ? (
+            {files.length > 0 ? (
               <div>
                 <FileCheck className="mx-auto h-8 w-8 text-green-500 mb-2" />
-                <p className="text-sm font-medium">{file.name}</p>
-                <p className="text-xs text-gray-500 mt-1">
-                  {(file.size / 1024).toFixed(2)} KB
-                </p>
+                <p className="text-sm font-medium">{files.length}件のファイルを選択中</p>
+                <ul className="mt-2 space-y-1 text-xs text-gray-500">
+                  {files.map((selectedFile) => (
+                    <li key={selectedFile.name}>
+                      {selectedFile.name} ({(selectedFile.size / 1024).toFixed(2)} KB)
+                    </li>
+                  ))}
+                </ul>
               </div>
             ) : (
               <div>
@@ -428,16 +445,23 @@ export default function ImportPage() {
                 <h3 className="font-medium text-blue-800">検出されたヘッダー名</h3>
               </div>
               <p className="text-sm text-blue-700 mb-2">
-                ファイルから以下のヘッダー名が検出されました：
+                ファイルごとに以下のヘッダー名が検出されました：
               </p>
-              <div className="flex flex-wrap gap-2">
-                {detectedHeaders.map((header, index) => (
-                  <span
-                    key={index}
-                    className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs"
-                  >
-                    {header}
-                  </span>
+              <div className="space-y-3">
+                {detectedHeaders.map((item) => (
+                  <div key={item.fileName}>
+                    <div className="text-xs font-medium text-blue-700 mb-1">{item.fileName}</div>
+                    <div className="flex flex-wrap gap-2">
+                      {item.headers.map((header, index) => (
+                        <span
+                          key={`${item.fileName}-${index}`}
+                          className="px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs"
+                        >
+                          {header}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 ))}
               </div>
               <p className="text-xs text-blue-600 mt-2">
@@ -488,36 +512,20 @@ export default function ImportPage() {
           )}
 
           {/* インポートボタン */}
-          {parsedData.length > 0 && validationErrors.length === 0 && (
-            <div className="space-y-2">
-              {!envVarsConfigured && (
-                <div className="bg-red-50 border border-red-200 rounded-lg p-3">
-                  <p className="text-sm text-red-700">
-                    ⚠️ 環境変数が設定されていないため、インポートは失敗します。
-                    上記の手順に従って環境変数を設定してください。
-                  </p>
-                </div>
-              )}
-              <Button
-                onClick={handleImport}
-                disabled={isProcessing || !envVarsConfigured}
-                className="w-full"
-                size="lg"
-              >
-                {isProcessing ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    インポート中...
-                  </>
-                ) : (
-                  <>
-                    <Upload className="mr-2 h-4 w-4" />
-                    データをインポート
-                  </>
-                )}
-              </Button>
-            </div>
-          )}
+          <Button
+            onClick={handleImport}
+            disabled={parsedData.length === 0 || validationErrors.length > 0 || isProcessing}
+            className="w-full"
+          >
+            {isProcessing ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                インポート中...
+              </>
+            ) : (
+              "インポート実行"
+            )}
+          </Button>
 
           {/* 処理結果 */}
           {processResult && (
@@ -565,6 +573,7 @@ export default function ImportPage() {
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-orange-300">
+                          <th className="text-left py-2 px-3 font-medium text-orange-800">ファイル</th>
                           <th className="text-left py-2 px-3 font-medium text-orange-800">行番号</th>
                           <th className="text-left py-2 px-3 font-medium text-orange-800">テナントID</th>
                           <th className="text-left py-2 px-3 font-medium text-orange-800">企業名</th>
@@ -573,6 +582,9 @@ export default function ImportPage() {
                       <tbody>
                         {processResult.unregisteredCompanies.map((company, index) => (
                           <tr key={index} className="border-b border-orange-200">
+                            <td className="py-2 px-3 text-orange-700">
+                              {company.fileName || "-"}
+                            </td>
                             <td className="py-2 px-3 text-orange-700">{company.rowNumber}</td>
                             <td className="py-2 px-3 text-orange-700">
                               {company.tenantId !== undefined ? company.tenantId : "未指定"}

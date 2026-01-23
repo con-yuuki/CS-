@@ -71,6 +71,7 @@ export interface Database {
           社員数: number | null;
           顧客数: number | null;
           取り込み元ファイル名: string | null;
+          raw_data: Json | null;
           created_at: string | null;
         };
         Insert: {
@@ -88,6 +89,7 @@ export interface Database {
           社員数?: number | null;
           顧客数?: number | null;
           取り込み元ファイル名?: string | null;
+          raw_data?: Json | null;
           created_at?: string | null;
         };
         Update: {
@@ -105,6 +107,7 @@ export interface Database {
           社員数?: number | null;
           顧客数?: number | null;
           取り込み元ファイル名?: string | null;
+          raw_data?: Json | null;
           created_at?: string | null;
         };
       };
@@ -114,7 +117,11 @@ export interface Database {
           tenant_id: number;
           score: number;
           status: "Excellent" | "Stable" | "Warning" | "Critical";
+          period_type: "weekly" | "monthly";
           period_date: string;
+          trend_status: string | null;
+          trend_change_pct: number | null;
+          zeroed_feature_alert: boolean | null;
           created_at: string;
         };
         Insert: {
@@ -122,7 +129,11 @@ export interface Database {
           tenant_id: number;
           score: number;
           status: "Excellent" | "Stable" | "Warning" | "Critical";
+          period_type: "weekly" | "monthly";
           period_date: string;
+          trend_status?: string | null;
+          trend_change_pct?: number | null;
+          zeroed_feature_alert?: boolean | null;
           created_at?: string;
         };
         Update: {
@@ -130,7 +141,11 @@ export interface Database {
           tenant_id?: number;
           score?: number;
           status?: "Excellent" | "Stable" | "Warning" | "Critical";
+          period_type?: "weekly" | "monthly";
           period_date?: string;
+          trend_status?: string | null;
+          trend_change_pct?: number | null;
+          zeroed_feature_alert?: boolean | null;
           created_at?: string;
         };
       };

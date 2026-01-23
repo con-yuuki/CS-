@@ -2,8 +2,8 @@
 
 import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { getLatestHealthScores } from "@/lib/services/health-score-service";
 import { getCompanies } from "@/lib/services/company-service";
-import { getLatestDynamicHealthScores, DynamicHealthScore } from "@/lib/services/dynamic-health-score-service";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -12,11 +12,13 @@ import Link from "next/link";
 import { Search, Download, TrendingUp, TrendingDown, AlertTriangle } from "lucide-react";
 import { exportToExcel } from "@/lib/utils/excel-exporter";
 import { Database } from "@/lib/supabase/database.types";
-import { CompanyScoreDetailModal } from "@/components/CompanyScoreDetailModal";
 
+type HealthScore = Database["public"]["Tables"]["health_scores"]["Row"];
 type Company = Database["public"]["Tables"]["ユーザー基礎情報"]["Row"];
 
-interface HealthScoreWithCompany extends DynamicHealthScore {}
+interface HealthScoreWithCompany extends HealthScore {
+  company: Company;
+}
 
 export default function DashboardPage() {
   const [searchQuery, setSearchQuery] = useState("");
@@ -24,20 +26,48 @@ export default function DashboardPage() {
     "all" | "Excellent" | "Stable" | "Warning" | "Critical"
   >("all");
   const [showHighImpactOnly, setShowHighImpactOnly] = useState(false);
-  const [selectedItem, setSelectedItem] = useState<HealthScoreWithCompany | null>(null);
+  const [periodType, setPeriodType] = useState<"weekly" | "monthly">("monthly");
+  const [expandedScoreId, setExpandedScoreId] = useState<string | null>(null);
+  const [sortKey, setSortKey] = useState<"score_desc" | "renewal_asc" | "renewal_desc">(
+    "score_desc"
+  );
 
-  // ヘルススコアデータの取得（動的に計算）
-  const { data: healthScores = [], isLoading: scoresLoading } = useQuery<DynamicHealthScore[]>({
-    queryKey: ["healthScores", "latest", "dynamic"],
-    queryFn: getLatestDynamicHealthScores,
+  // ヘルススコアデータの取得
+  const { data: healthScores = [], isLoading: scoresLoading } = useQuery<HealthScore[]>({
+    queryKey: ["healthScores", "latest", periodType],
+    queryFn: () => getLatestHealthScores(periodType),
   });
+
+  // 企業データの取得
+  const { data: companies = [], isLoading: companiesLoading } = useQuery<Company[]>({
+    queryKey: ["companies"],
+    queryFn: getCompanies,
+  });
+
+  const parseRenewalDate = (value?: string | null) => {
+    if (!value) return null;
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+  };
+
+  const formatTrendChange = (value?: number | null) => {
+    if (value === null || value === undefined || Number.isNaN(Number(value))) return "不明";
+    const num = Number(value);
+    const sign = num > 0 ? "+" : "";
+    return `${sign}${num.toFixed(1)}%`;
+  };
 
   // データの結合とフィルタリング
   const filteredData = useMemo(() => {
-    // healthScoresには既にcompanyが含まれている
-    let combined: HealthScoreWithCompany[] = healthScores.map((score) => ({
-      ...score,
-    }));
+    const companyMap = new Map<number, Company>(companies.map((c) => [c.id, c]));
+
+    let combined: HealthScoreWithCompany[] = healthScores
+      .map((score) => {
+        const company = companyMap.get(score.tenant_id);
+        if (!company) return null;
+        return { ...score, company };
+      })
+      .filter((item): item is HealthScoreWithCompany => item !== null);
 
     // 検索フィルタ
     if (searchQuery) {
@@ -59,29 +89,45 @@ export default function DashboardPage() {
       combined = combined.filter((item) => Number(item.company.mrc_ltv || 0) >= 55000);
     }
 
-    return combined.sort((a, b) => {
-      if (a.displayPriority !== b.displayPriority) {
-        return a.displayPriority === "max" ? -1 : 1;
-      }
-      return b.score - a.score;
-    });
-  }, [healthScores, searchQuery, statusFilter, showHighImpactOnly]);
+    const sorted = [...combined];
+    if (sortKey === "renewal_asc" || sortKey === "renewal_desc") {
+      sorted.sort((a, b) => {
+        const aDate = parseRenewalDate(a.company.next_renewal_month);
+        const bDate = parseRenewalDate(b.company.next_renewal_month);
+        if (!aDate && !bDate) return 0;
+        if (!aDate) return 1;
+        if (!bDate) return -1;
+        return sortKey === "renewal_asc"
+          ? aDate.getTime() - bDate.getTime()
+          : bDate.getTime() - aDate.getTime();
+      });
+    } else {
+      sorted.sort((a, b) => b.score - a.score);
+    }
+
+    return sorted;
+  }, [healthScores, companies, searchQuery, statusFilter, showHighImpactOnly, sortKey]);
 
   // 統計情報の計算
   const stats = useMemo(() => {
+    const allData = healthScores.map((score) => {
+      const company = companies.find((c) => c.id === score.tenant_id);
+      return { score, company };
+    });
+
     const averageScore =
-      healthScores.length > 0
-        ? healthScores.reduce((sum, item) => sum + item.score, 0) / healthScores.length
+      allData.length > 0
+        ? allData.reduce((sum, item) => sum + item.score.score, 0) / allData.length
         : 0;
 
     const statusCounts = {
-      Excellent: healthScores.filter((item) => item.status === "Excellent").length,
-      Stable: healthScores.filter((item) => item.status === "Stable").length,
-      Warning: healthScores.filter((item) => item.status === "Warning").length,
-      Critical: healthScores.filter((item) => item.status === "Critical").length,
+      Excellent: allData.filter((item) => item.score.status === "Excellent").length,
+      Stable: allData.filter((item) => item.score.status === "Stable").length,
+      Warning: allData.filter((item) => item.score.status === "Warning").length,
+      Critical: allData.filter((item) => item.score.status === "Critical").length,
     };
 
-    const highImpactCount = healthScores.filter(
+    const highImpactCount = allData.filter(
       (item) => item.company && Number(item.company.mrc_ltv || 0) >= 55000
     ).length;
 
@@ -89,23 +135,22 @@ export default function DashboardPage() {
       averageScore: Math.round(averageScore),
       statusCounts,
       highImpactCount,
-      totalCount: healthScores.length,
+      totalCount: allData.length,
     };
-  }, [healthScores]);
+  }, [healthScores, companies]);
 
   const handleExport = () => {
     const exportData = filteredData.map((item) => ({
-      healthScore: {
-        ...item,
-        period_date: item.period_date,
-        created_at: new Date().toISOString(), // 動的計算のため現在時刻を使用
-      } as any,
+      healthScore: item,
       company: item.company,
     }));
-    exportToExcel(exportData, `health_scores_${new Date().toISOString().split("T")[0]}.xlsx`);
+    exportToExcel(
+      exportData,
+      `health_scores_${periodType}_${new Date().toISOString().split("T")[0]}.xlsx`
+    );
   };
 
-  const isLoading = scoresLoading;
+  const isLoading = scoresLoading || companiesLoading;
 
   return (
     <div className="container mx-auto px-4 py-8">
@@ -190,6 +235,22 @@ export default function DashboardPage() {
           <CardTitle>フィルタ</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="flex flex-wrap gap-2">
+            <Button
+              type="button"
+              variant={periodType === "monthly" ? "default" : "outline"}
+              onClick={() => setPeriodType("monthly")}
+            >
+              月次
+            </Button>
+            <Button
+              type="button"
+              variant={periodType === "weekly" ? "default" : "outline"}
+              onClick={() => setPeriodType("weekly")}
+            >
+              週次
+            </Button>
+          </div>
           <div className="flex gap-4">
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
@@ -200,6 +261,17 @@ export default function DashboardPage() {
                 className="pl-10"
               />
             </div>
+            <select
+              value={sortKey}
+              onChange={(e) =>
+                setSortKey(e.target.value as "score_desc" | "renewal_asc" | "renewal_desc")
+              }
+              className="rounded-md border border-input bg-background px-3 py-2 text-sm"
+            >
+              <option value="score_desc">スコア高い順</option>
+              <option value="renewal_asc">契約更新日が近い順</option>
+              <option value="renewal_desc">契約更新日が遠い順</option>
+            </select>
             <select
               value={statusFilter}
               onChange={(e) =>
@@ -242,28 +314,21 @@ export default function DashboardPage() {
             <div className="space-y-2">
               {filteredData.map((item) => {
                 const isHighImpact = Number(item.company.mrc_ltv || 0) >= 55000;
-                const isPriorityMax = item.displayPriority === "max";
+                const isExpanded = expandedScoreId === item.id;
                 return (
                   <div
-                    key={item.tenant_id}
-                    onClick={() => setSelectedItem(item)}
+                    key={item.id}
                     className={`border rounded-lg p-4 hover:bg-gray-50 transition-colors cursor-pointer ${
-                      isPriorityMax
-                        ? "border-red-300 bg-red-50/40"
-                        : isHighImpact
-                        ? "border-yellow-300 bg-yellow-50/30"
-                        : ""
+                      isHighImpact ? "border-yellow-300 bg-yellow-50/30" : ""
                     }`}
+                    onClick={() =>
+                      setExpandedScoreId((current) => (current === item.id ? null : item.id))
+                    }
                   >
                     <div className="flex items-center justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-3 mb-2">
                           <h3 className="font-semibold text-lg">{item.company.name}</h3>
-                          {isPriorityMax && (
-                            <Badge variant="outline" className="bg-red-100 text-red-800">
-                              優先対応
-                            </Badge>
-                          )}
                           {isHighImpact && (
                             <Badge variant="outline" className="bg-yellow-100 text-yellow-800">
                               インパクト企業
@@ -286,32 +351,43 @@ export default function DashboardPage() {
                         <div className="flex items-center gap-4 text-sm text-gray-600">
                           <span>企業ID: {item.company.id}</span>
                           <span>月額契約額: ¥{Number(item.company.mrc_ltv || 0).toLocaleString()}</span>
+                          <span>契約更新日: {item.company.next_renewal_month || "不明"}</span>
                           <span>期間: {item.period_date}</span>
-                          <span>
-                            トレンド:{" "}
-                            {item.trendStatus === "up"
-                              ? "上昇"
-                              : item.trendStatus === "down"
-                              ? "下降"
-                              : "横ばい"}
-                          </span>
-                          <span>
-                            前月比: {item.trendChangeRate > 0 ? "+" : ""}
-                            {item.trendChangeRate}%
-                          </span>
                         </div>
-                        {item.learningPeriodAlert?.hasAlert && (
-                          <div className="mt-2 p-2 bg-yellow-50 border border-yellow-200 rounded text-sm text-yellow-800">
-                            <AlertTriangle className="inline h-4 w-4 mr-1" />
-                            {item.learningPeriodAlert.message}
-                          </div>
-                        )}
                       </div>
                       <div className="text-right">
                         <div className="text-3xl font-bold">{item.score}</div>
                         <div className="text-xs text-gray-500">スコア</div>
                       </div>
                     </div>
+                    {isExpanded && (
+                      <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-700">
+                        <div>
+                          <span className="font-medium">次回更新月:</span>{" "}
+                          {item.company.next_renewal_month || "不明"}
+                        </div>
+                        <div>
+                          <span className="font-medium">チャーンステータス:</span>{" "}
+                          {item.company.churn_status || "不明"}
+                        </div>
+                        <div>
+                          <span className="font-medium">トレンドステータス:</span>{" "}
+                          {item.trend_status || "不明"}
+                        </div>
+                        <div>
+                          <span className="font-medium">前期比:</span>{" "}
+                          {formatTrendChange(item.trend_change_pct as number | null)}
+                        </div>
+                        <div>
+                          <span className="font-medium">機能停止アラート:</span>{" "}
+                          {item.zeroed_feature_alert ? "あり" : "なし"}
+                        </div>
+                        <div>
+                          <span className="font-medium">期間タイプ:</span>{" "}
+                          {item.period_type === "weekly" ? "週次" : "月次"}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -319,17 +395,6 @@ export default function DashboardPage() {
           )}
         </CardContent>
       </Card>
-
-      {/* 詳細モーダル */}
-      {selectedItem && (
-        <CompanyScoreDetailModal
-          open={!!selectedItem}
-          onOpenChange={(open) => {
-            if (!open) setSelectedItem(null);
-          }}
-          healthScore={selectedItem}
-        />
-      )}
     </div>
   );
 }

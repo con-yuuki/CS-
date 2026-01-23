@@ -21,6 +21,44 @@ export async function getUsageLogs(tenantId?: number, periodType?: "weekly" | "m
   return data;
 }
 
+export async function getUsageLogHistory(
+  tenantId: number,
+  periodType: "weekly" | "monthly"
+): Promise<UsageLog[]> {
+  let query = supabase
+    .from("usage_logs")
+    .select("*")
+    .eq("会社ID", String(tenantId));
+
+  if (periodType === "weekly") {
+    query = query.not("対象週", "is", null).order("対象週", { ascending: true });
+  } else {
+    query = query.not("対象月", "is", null).order("対象月", { ascending: true });
+  }
+
+  const { data, error } = await query;
+
+  if (error) throw error;
+  return data ?? [];
+}
+
+export async function getUsageLogHistoryAll(
+  periodType: "weekly" | "monthly"
+): Promise<UsageLog[]> {
+  let query = supabase.from("usage_logs").select("*");
+
+  if (periodType === "weekly") {
+    query = query.not("対象週", "is", null).order("対象週", { ascending: true });
+  } else {
+    query = query.not("対象月", "is", null).order("対象月", { ascending: true });
+  }
+
+  const { data, error } = await query;
+
+  if (error) throw error;
+  return data ?? [];
+}
+
 export async function getUsageLogByPeriod(
   tenantId: number,
   periodType: "weekly" | "monthly",
@@ -47,8 +85,7 @@ export async function getUsageLogByPeriod(
       periodDate,
       error,
     });
-    // エラーを投げずにnullを返す（モーダルが表示されなくなるのを防ぐ）
-    return null;
+    throw error;
   }
   
   return data || null;
@@ -105,7 +142,7 @@ export async function upsertUsageLog(log: {
     顧客数: null,
     取り込み元ファイル名: null,
     raw_data: log.raw_data || null,
-  } as any;
+  };
 
   // periodTypeに応じて対象月または対象週を設定
   if (log.period_type === "weekly") {
