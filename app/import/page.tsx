@@ -76,10 +76,8 @@ export default function ImportPage() {
     return trimmed;
   };
 
-  const normalizeMonthlyDate = (value?: string) => {
-    if (!value) return value;
-    const normalized = normalizePeriodDate(value);
-    if (!normalized) return normalized;
+  const normalizeMonthlyDate = (value: string) => {
+    const normalized = normalizePeriodDate(value) ?? value;
     if (/^\d{4}-\d{2}-\d{2}$/.test(normalized)) {
       return `${normalized.slice(0, 7)}-01`;
     }
