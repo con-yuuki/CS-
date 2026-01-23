@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase/server";
 
+export const dynamic = "force-dynamic";
+
 const CRON_SECRET = process.env.CRON_SECRET;
 
 export async function POST(request: Request) {
@@ -24,7 +26,15 @@ export async function POST(request: Request) {
     );
   }
 
-  const supabase = getSupabaseAdmin() as any;
+  let supabase: any;
+  try {
+    supabase = getSupabaseAdmin();
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Server error" },
+      { status: 500 }
+    );
+  }
   const update = {
     status: "acknowledged",
     acknowledged_at: new Date().toISOString(),

@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { getSupabaseAdmin } from "@/lib/supabase/server";
 
+export const dynamic = "force-dynamic";
+
 const CRON_SECRET = process.env.CRON_SECRET;
 
 export async function GET(request: Request) {
@@ -11,16 +13,23 @@ export async function GET(request: Request) {
     }
   }
 
-  const supabase = getSupabaseAdmin();
-  const { data, error } = await supabase
-    .from("renewal_alerts")
-    .select("*")
-    .eq("status", "open");
+  try {
+    const supabase = getSupabaseAdmin();
+    const { data, error } = await supabase
+      .from("renewal_alerts")
+      .select("*")
+      .eq("status", "open");
 
-  if (error) {
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    return NextResponse.json({ data: data ?? [] });
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Server error" },
+      { status: 500 }
+    );
   }
-
-  return NextResponse.json({ data: data ?? [] });
 }
 

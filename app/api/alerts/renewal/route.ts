@@ -8,6 +8,8 @@ import {
   upsertRenewalAlerts,
 } from "@/lib/services/renewal-alert-service";
 
+export const dynamic = "force-dynamic";
+
 const CRON_SECRET = process.env.CRON_SECRET;
 const SLACK_WEBHOOK_URL = process.env.SLACK_WEBHOOK_URL;
 const DASHBOARD_URL = process.env.ALERT_DASHBOARD_URL;
@@ -52,7 +54,15 @@ export async function GET(request: Request) {
     );
   }
 
-  const supabase = getSupabaseAdmin();
+  let supabase: ReturnType<typeof getSupabaseAdmin>;
+  try {
+    supabase = getSupabaseAdmin();
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Server error" },
+      { status: 500 }
+    );
+  }
   const jstNow = getJstNow();
   const now = new Date();
 
