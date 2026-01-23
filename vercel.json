@@ -1,0 +1,9 @@
+{
+  "crons": [
+    {
+      "path": "/api/alerts/renewal",
+      "schedule": "0 0 * * *"
+    }
+  ]
+}
+
