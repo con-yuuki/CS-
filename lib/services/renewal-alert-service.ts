@@ -1,9 +1,7 @@
 import { addMonths, differenceInCalendarDays, format, isValid, parseISO, startOfMonth } from "date-fns";
 import { Database } from "@/lib/supabase/database.types";
 
-type SupabaseClient = ReturnType<
-  typeof import("@/lib/supabase/server").getSupabaseAdmin
->;
+type SupabaseAdminClient = any;
 
 type Company = Database["public"]["Tables"]["ユーザー基礎情報"]["Row"];
 type HealthScore = Database["public"]["Tables"]["health_scores"]["Row"];
@@ -50,7 +48,7 @@ export const isWithinTargetWindow = (renewalDate: Date, targetDate: Date) => {
 };
 
 const getLatestHealthScores = async (
-  supabase: SupabaseClient,
+  supabase: SupabaseAdminClient,
   tenantIds: number[]
 ) => {
   if (tenantIds.length === 0) return new Map<number, HealthScore>();
@@ -66,7 +64,7 @@ const getLatestHealthScores = async (
   }
 
   const latestByTenant = new Map<number, HealthScore>();
-  for (const score of data ?? []) {
+  for (const score of (data ?? []) as HealthScore[]) {
     if (!latestByTenant.has(score.tenant_id)) {
       latestByTenant.set(score.tenant_id, score);
     }
@@ -76,7 +74,7 @@ const getLatestHealthScores = async (
 };
 
 export const collectRenewalAlertItems = async (
-  supabase: SupabaseClient,
+  supabase: SupabaseAdminClient,
   baseDate: Date,
   monthsAhead = 5
 ): Promise<RenewalAlertItem[]> => {
@@ -90,7 +88,7 @@ export const collectRenewalAlertItems = async (
     throw error;
   }
 
-  const candidates = (companies ?? []).filter((company) => {
+  const candidates = ((companies ?? []) as Company[]).filter((company) => {
     const renewalDate = toDate(company.next_renewal_month);
     if (!renewalDate) return false;
     return isWithinTargetWindow(renewalDate, targetDate);
@@ -112,7 +110,7 @@ export const collectRenewalAlertItems = async (
 };
 
 export const upsertRenewalAlerts = async (
-  supabase: SupabaseClient,
+  supabase: SupabaseAdminClient,
   items: RenewalAlertItem[],
   baseDate: Date,
   monthsAhead = 5
@@ -138,11 +136,11 @@ export const upsertRenewalAlerts = async (
     throw error;
   }
 
-  return data ?? [];
+  return (data ?? []) as RenewalAlert[];
 };
 
 export const fetchOpenAlerts = async (
-  supabase: SupabaseClient
+  supabase: SupabaseAdminClient
 ): Promise<RenewalAlert[]> => {
   const { data, error } = await supabase
     .from("renewal_alerts")
@@ -153,11 +151,11 @@ export const fetchOpenAlerts = async (
     throw error;
   }
 
-  return data ?? [];
+  return (data ?? []) as RenewalAlert[];
 };
 
 export const markNotified = async (
-  supabase: SupabaseClient,
+  supabase: SupabaseAdminClient,
   alertIds: string[],
   notifiedAt: string
 ) => {

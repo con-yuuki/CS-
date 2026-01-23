@@ -24,7 +24,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const supabase = getSupabaseAdmin();
+  const supabase = getSupabaseAdmin() as any;
   const update = {
     status: "acknowledged",
     acknowledged_at: new Date().toISOString(),

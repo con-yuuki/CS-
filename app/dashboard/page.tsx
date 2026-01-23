@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getLatestHealthScores } from "@/lib/services/health-score-service";
 import { getCompanies } from "@/lib/services/company-service";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -15,6 +15,7 @@ import { Database } from "@/lib/supabase/database.types";
 
 type HealthScore = Database["public"]["Tables"]["health_scores"]["Row"];
 type Company = Database["public"]["Tables"]["ユーザー基礎情報"]["Row"];
+type RenewalAlert = Database["public"]["Tables"]["renewal_alerts"]["Row"];
 
 interface HealthScoreWithCompany extends HealthScore {
   company: Company;
@@ -31,6 +32,7 @@ export default function DashboardPage() {
   const [sortKey, setSortKey] = useState<"score_desc" | "renewal_asc" | "renewal_desc">(
     "score_desc"
   );
+  const queryClient = useQueryClient();
 
   // ヘルススコアデータの取得
   const { data: healthScores = [], isLoading: scoresLoading } = useQuery<HealthScore[]>({
@@ -44,6 +46,18 @@ export default function DashboardPage() {
     queryFn: getCompanies,
   });
 
+  const { data: renewalAlerts = [] } = useQuery<RenewalAlert[]>({
+    queryKey: ["renewalAlerts", "open"],
+    queryFn: async () => {
+      const response = await fetch("/api/alerts/renewal/open");
+      if (!response.ok) {
+        throw new Error("Failed to load renewal alerts");
+      }
+      const body = await response.json();
+      return body.data ?? [];
+    },
+  });
+
   const parseRenewalDate = (value?: string | null) => {
     if (!value) return null;
     const date = new Date(value);
@@ -55,6 +69,28 @@ export default function DashboardPage() {
     const num = Number(value);
     const sign = num > 0 ? "+" : "";
     return `${sign}${num.toFixed(1)}%`;
+  };
+
+  const alertByTenantId = useMemo(() => {
+    const map = new Map<number, RenewalAlert>();
+    for (const alert of renewalAlerts) {
+      map.set(alert.tenant_id, alert);
+    }
+    return map;
+  }, [renewalAlerts]);
+
+  const handleAcknowledge = async (alertId: string) => {
+    const response = await fetch("/api/alerts/renewal/ack", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ alertId }),
+    });
+    if (!response.ok) {
+      const body = await response.text();
+      alert(`更新アラートの更新に失敗しました: ${body}`);
+      return;
+    }
+    await queryClient.invalidateQueries({ queryKey: ["renewalAlerts", "open"] });
   };
 
   // データの結合とフィルタリング
@@ -365,6 +401,26 @@ export default function DashboardPage() {
                         <div>
                           <span className="font-medium">次回更新月:</span>{" "}
                           {item.company.next_renewal_month || "不明"}
+                        </div>
+                        <div className="mt-2 flex items-center justify-between text-sm">
+                          <span>
+                            更新アラート:{" "}
+                            {alertByTenantId.has(item.company.id) ? "未対応" : "対応済み"}
+                          </span>
+                          {alertByTenantId.has(item.company.id) && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => {
+                                const alert = alertByTenantId.get(item.company.id);
+                                if (alert) {
+                                  handleAcknowledge(alert.id);
+                                }
+                              }}
+                            >
+                              対応済みにする
+                            </Button>
+                          )}
                         </div>
                         <div>
                           <span className="font-medium">チャーンステータス:</span>{" "}
