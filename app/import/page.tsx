@@ -174,6 +174,7 @@ export default function ImportPage() {
       tenantId?: number | string;
       companyName?: string;
       rowNumber: number;
+      fileName?: string;
     }> = [];
 
     try {

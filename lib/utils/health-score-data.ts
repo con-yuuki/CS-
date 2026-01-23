@@ -1,5 +1,16 @@
-import { ActivityEntry, SCORE_FEATURE_DEFINITIONS, LoginStats } from "@/lib/score-calculator";
 import { getFeatureCountFromRawData } from "@/lib/utils/feature-usage-helper";
+
+export interface ActivityEntry {
+  name: string;
+  count: number;
+}
+
+export interface LoginStats {
+  loginDays: number;
+  workingDays: number;
+}
+
+const SCORE_FEATURE_DEFINITIONS: Array<{ key: string; patterns: string[] }> = [];
 
 function normalizeText(value: string): string {
   return value.toLowerCase().replace(/[\s　_]/g, "");

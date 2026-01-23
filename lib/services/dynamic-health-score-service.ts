@@ -1,10 +1,9 @@
 import { getCompanies } from "./company-service";
 import { getUsageLogs } from "./usage-log-service";
-import { calculateHealthScore, calculateTrend, TrendResult, TrendStatus } from "@/lib/score-calculator";
+import { calculateHealthScore } from "@/lib/score-calculator";
 import { Database } from "@/lib/supabase/database.types";
 import { format } from "date-fns";
 import { checkLearningPeriodAlert } from "./learning-period-alert-service";
-import { buildActivityDataFromUsageLog, buildLoginStatsFromUsageLog } from "@/lib/utils/health-score-data";
 
 type UsageLog = Database["public"]["Tables"]["usage_logs"]["Row"];
 type Company = Database["public"]["Tables"]["ユーザー基礎情報"]["Row"];
@@ -13,9 +12,16 @@ export interface DynamicHealthScore {
   tenant_id: number;
   score: number;
   status: "Excellent" | "Stable" | "Warning" | "Critical";
-  trendStatus: TrendStatus;
+  trendStatus: "up" | "down" | "flat";
   trendChangeRate: number;
-  trend: TrendResult;
+  trend: {
+    status: "up" | "down" | "flat";
+    changePercent: number;
+    currentTotal: number;
+    previousTotal: number;
+    hasFeatureDrop: boolean;
+    droppedFeatures: string[];
+  };
   displayPriority: "max" | "normal";
   period_date: string;
   period_type: "weekly" | "monthly";
@@ -32,6 +38,47 @@ export interface DynamicHealthScore {
     hasAlert: boolean;
     message: string;
   };
+}
+
+function normalizeRawData(rawData: UsageLog["raw_data"]): Record<string, number> {
+  if (!rawData) return {};
+  if (typeof rawData === "string") {
+    try {
+      const parsed = JSON.parse(rawData);
+      return typeof parsed === "object" && parsed ? (parsed as Record<string, any>) : {};
+    } catch {
+      return {};
+    }
+  }
+  return rawData as Record<string, any>;
+}
+
+function extractFeatureCounts(log: UsageLog): Record<string, number> {
+  const counts: Record<string, number> = {};
+  const rawData = normalizeRawData(log.raw_data);
+  for (const [key, value] of Object.entries(rawData)) {
+    const numeric = Number(value);
+    if (Number.isFinite(numeric) && numeric > 0) {
+      counts[key] = numeric;
+    }
+  }
+
+  const estCount = Number(log["見積作成数"] ?? 0);
+  const constCount = Number(log["工事登録数"] ?? 0);
+  if (estCount > 0) counts["見積"] = estCount;
+  if (constCount > 0) counts["工事"] = constCount;
+
+  return counts;
+}
+
+function getDroppedFeatures(
+  current: Record<string, number>,
+  previous?: Record<string, number>
+): string[] {
+  if (!previous) return [];
+  return Object.keys(previous).filter(
+    (key) => (Number(previous[key]) || 0) > 0 && (Number(current[key]) || 0) === 0
+  );
 }
 
 /**
@@ -110,19 +157,39 @@ export async function getLatestDynamicHealthScores(): Promise<DynamicHealthScore
 
     const previousLog = previousLogs.length > 0 ? (previousLogs[0] as UsageLog) : null;
     
-    const activityData = buildActivityDataFromUsageLog(currentLog);
-    const loginStats = buildLoginStatsFromUsageLog(currentLog, periodType);
+    const currentPeriod = {
+      login_count: Number(currentLog["ログイン回数"] ?? 0),
+      feature_counts: extractFeatureCounts(currentLog),
+    };
+    const previousPeriod = previousLog
+      ? {
+          login_count: Number(previousLog["ログイン回数"] ?? 0),
+          feature_counts: extractFeatureCounts(previousLog),
+        }
+      : undefined;
 
+    const mrcValue = Number(company.mrc_ltv ?? 0);
     const scoreResult = calculateHealthScore({
-      activityData,
-      loginStats,
+      currentPeriod,
+      previousPeriod,
+      mrc: mrcValue,
     });
 
-    const previousActivityData = previousLog ? buildActivityDataFromUsageLog(previousLog) : undefined;
-    const trend = calculateTrend(activityData, previousActivityData);
-    const isHighImpact = Number(company.mrc_ltv || 0) >= 55000;
+    const droppedFeatures = getDroppedFeatures(
+      currentPeriod.feature_counts,
+      previousPeriod?.feature_counts
+    );
+    const trend = {
+      status: scoreResult.trendStatus,
+      changePercent: scoreResult.trendChangePct,
+      currentTotal: scoreResult.totalActions,
+      previousTotal: scoreResult.previousTotalActions,
+      hasFeatureDrop: droppedFeatures.length > 0,
+      droppedFeatures,
+    };
+    const isHighImpact = mrcValue >= 55000;
     const displayPriority: "max" | "normal" =
-      isHighImpact && trend.status === "down" ? "max" : "normal";
+      isHighImpact && scoreResult.trendStatus === "down" ? "max" : "normal";
     
     // 学習期間アラートをチェック
     let learningPeriodAlert = { hasAlert: false, message: "" };
@@ -140,14 +207,21 @@ export async function getLatestDynamicHealthScores(): Promise<DynamicHealthScore
       tenant_id: company.id,
       score: scoreResult.score,
       status: scoreResult.status,
-      trendStatus: trend.status,
-      trendChangeRate: trend.changePercent,
+      trendStatus: scoreResult.trendStatus,
+      trendChangeRate: scoreResult.trendChangePct,
       trend,
       displayPriority,
       period_date: latestPeriodDateStr,
       period_type: periodType,
       company,
-      breakdown: scoreResult.breakdown,
+      breakdown: {
+        loginUsed: scoreResult.breakdown.loginActive,
+        usedFeatureCount: scoreResult.breakdown.activeFeatures,
+        totalFeatureCount: scoreResult.breakdown.totalFeatureSlots,
+        scorePerItem: 0,
+        rawScore: scoreResult.score,
+        finalScore: scoreResult.score,
+      },
       learningPeriodAlert,
     });
   }
